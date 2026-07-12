@@ -1,0 +1,191 @@
+{
+  "report_type": "weekly_scan",
+  "as_of": "2026-07-09",
+  "generated_at": "2026-07-12T16:17:27.487547+08:00",
+  "market_index": {
+    "trade_date": "2026-07-09",
+    "source": "TWSE-FMTQIK",
+    "close": 45354.61,
+    "change_pts": -379.8,
+    "change_pct": -0.83,
+    "volume_yi": 9967.89,
+    "unit_volume": "億元"
+  },
+  "market_margin": {
+    "trade_date": "2026-07-09",
+    "source": "TWSE-MI_MARGN",
+    "unit_lots": "張",
+    "unit_amount": "億元",
+    "margin_balance_lots": 9614955,
+    "margin_balance_lots_chg": 24351,
+    "short_balance_lots": 203714,
+    "short_balance_lots_chg": -2116,
+    "margin_balance_yi": 6196.48,
+    "margin_balance_yi_chg": 58.33
+  },
+  "institutional_5d": [
+    {
+      "trade_date": "2026-07-09",
+      "source": "TWSE-BFI82U",
+      "unit": "億元",
+      "foreign_net": -472.53,
+      "trust_net": 199.01,
+      "dealer_self_net": -20.36,
+      "dealer_hedge_net": -56.35,
+      "dealer_total_net": -76.71
+    },
+    {
+      "trade_date": "2026-07-08",
+      "source": "TWSE-BFI82U",
+      "unit": "億元",
+      "foreign_net": -379.49,
+      "trust_net": 126.8,
+      "dealer_self_net": -33.43,
+      "dealer_hedge_net": -136.0,
+      "dealer_total_net": -169.43
+    }
+  ],
+  "dealer_self_streak": {
+    "target": "market_dealer_self",
+    "source": "TWSE-BFI82U",
+    "unit": "億元",
+    "recent": [
+      {
+        "trade_date": "2026-07-09",
+        "net": -20.36
+      },
+      {
+        "trade_date": "2026-07-08",
+        "net": -33.43
+      }
+    ],
+    "streak_days": 2,
+    "streak_direction": "賣",
+    "signal": null
+  },
+  "foreign_futures_oi": {
+    "as_of": "2026-07-09",
+    "source": "TAIFEX-MarketDataOfMajorInstitutionalTradersDetailsOfFuturesContractsBytheDate",
+    "unit": "口",
+    "headline_contract": "臺股期貨",
+    "headline_net": -80730,
+    "by_contract": [
+      {
+        "contract_code": "小型臺指期貨",
+        "oi_long": 6111,
+        "oi_short": 1831,
+        "oi_net": 4280
+      },
+      {
+        "contract_code": "臺股期貨",
+        "oi_long": 6562,
+        "oi_short": 87292,
+        "oi_net": -80730
+      },
+      {
+        "contract_code": "金融期貨",
+        "oi_long": 127,
+        "oi_short": 283,
+        "oi_net": -156
+      },
+      {
+        "contract_code": "電子期貨",
+        "oi_long": 17,
+        "oi_short": 297,
+        "oi_net": -280
+      }
+    ]
+  },
+  "watchlist": [
+    {
+      "id": "0050",
+      "name": "元大台灣50",
+      "trade_date": "2026-07-09",
+      "source": "TWSE-T86",
+      "unit_institutional": "張",
+      "foreign_net": -9035,
+      "trust_net": 2875,
+      "dealer_self_net": 529,
+      "dealer_hedge_net": -13237,
+      "unit_margin": "張",
+      "margin_balance": 13306,
+      "margin_balance_chg": -105,
+      "short_balance": 942,
+      "short_balance_chg": -26
+    },
+    {
+      "id": "2308",
+      "name": "台達電",
+      "trade_date": "2026-07-09",
+      "source": "TWSE-T86",
+      "unit_institutional": "張",
+      "foreign_net": -815,
+      "trust_net": 31,
+      "dealer_self_net": -2,
+      "dealer_hedge_net": 9,
+      "unit_margin": "張",
+      "margin_balance": 7871,
+      "margin_balance_chg": 103,
+      "short_balance": 12,
+      "short_balance_chg": -3,
+      "close": 1880.0,
+      "dividend_yield": 0.62,
+      "pe": 69.32,
+      "pb": 16.3
+    },
+    {
+      "id": "2330",
+      "name": "台積電",
+      "trade_date": "2026-07-09",
+      "source": "TWSE-T86",
+      "unit_institutional": "張",
+      "foreign_net": -12749,
+      "trust_net": 43,
+      "dealer_self_net": 1,
+      "dealer_hedge_net": 89,
+      "unit_margin": "張",
+      "margin_balance": 33061,
+      "margin_balance_chg": 778,
+      "short_balance": 71,
+      "short_balance_chg": -14,
+      "close": 2415.0,
+      "dividend_yield": 0.91,
+      "pe": 32.47,
+      "pb": 10.63
+    },
+    {
+      "id": "2454",
+      "name": "聯發科",
+      "trade_date": "2026-07-09",
+      "source": "TWSE-T86",
+      "unit_institutional": "張",
+      "foreign_net": -689,
+      "trust_net": -215,
+      "dealer_self_net": 103,
+      "dealer_hedge_net": 11,
+      "unit_margin": "張",
+      "margin_balance": 10182,
+      "margin_balance_chg": 47,
+      "short_balance": 7,
+      "short_balance_chg": -1,
+      "close": 3925.0,
+      "dividend_yield": 1.36,
+      "pe": 62.55,
+      "pb": 16.05
+    }
+  ],
+  "data_quality": {
+    "verified": [
+      "market_index",
+      "market_margin",
+      "institutional_5d",
+      "dealer_self_streak",
+      "foreign_futures_oi",
+      "watchlist"
+    ],
+    "unavailable": [
+      "market_pb(大盤股價淨值比)——TWSE 沒有官方每日 API,要算需自行對全市場個股做市值加權,目前沒有流通股數/市值資料源可用,故不提供(不做未加權簡易平均,避免誤導)",
+      "market_closed 明確標記——目前『當天沒有資料』可能是休市,也可能是抓取失敗,兩者尚未區分"
+    ]
+  }
+}
