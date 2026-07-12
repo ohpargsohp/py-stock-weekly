@@ -5,9 +5,14 @@ from datetime import datetime
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8")  # Windows 主控台預設 cp950,印中文/emoji 會炸
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import config
 from core.analysis import dealer_streak
 from core.export_json import export_weekly_scan
+from core.mailer import send_report
 from core.registry import load_providers
 from core.report import export_excel
 from core.storage import Storage
@@ -39,6 +44,8 @@ def run(date_str=None):
 
     export_weekly_scan(config.DB_PATH, config.JSON_PATH)
     print(f"🧾 判讀用 JSON 已輸出: {config.JSON_PATH}")
+
+    send_report([config.JSON_PATH, config.EXCEL_PATH])
 
 
 if __name__ == "__main__":
