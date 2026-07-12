@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 from datetime import datetime
@@ -16,6 +17,11 @@ from core.mailer import send_report
 from core.registry import load_providers
 from core.report import export_excel
 from core.storage import Storage
+
+
+def _with_date(path, date_str):
+    root, ext = os.path.splitext(path)
+    return f"{root}_{date_str}{ext}"
 
 
 def run(date_str=None):
@@ -39,13 +45,15 @@ def run(date_str=None):
 
     store.close()
 
-    export_excel(config.DB_PATH, config.EXCEL_PATH)
-    print(f"📊 報表已輸出: {config.EXCEL_PATH}")
+    excel_path = _with_date(config.EXCEL_PATH, date_str)
+    export_excel(config.DB_PATH, excel_path)
+    print(f"📊 報表已輸出: {excel_path}")
 
-    export_weekly_scan(config.DB_PATH, config.JSON_PATH)
-    print(f"🧾 判讀用 JSON 已輸出: {config.JSON_PATH}")
+    json_path = _with_date(config.JSON_PATH, date_str)
+    export_weekly_scan(config.DB_PATH, json_path)
+    print(f"🧾 判讀用 JSON 已輸出: {json_path}")
 
-    send_report([config.JSON_PATH, config.EXCEL_PATH])
+    send_report([json_path, excel_path])
 
 
 if __name__ == "__main__":
