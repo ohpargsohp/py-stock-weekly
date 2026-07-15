@@ -87,9 +87,10 @@ pip install -r requirements.txt
 ```env
 SENDER_EMAIL=you@gmail.com
 SENDER_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx
+EMAIL_TO=receiver@example.com
 ```
 
-`SENDER_APP_PASSWORD` 是 Gmail 的「應用程式密碼」,不是登入密碼,需先在 Google 帳戶開啟兩步驟驗證後才能產生:[myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)。未設定這兩個變數時程式會自動略過寄信,不影響抓取與匯出報表。
+`SENDER_APP_PASSWORD` 是 Gmail 的「應用程式密碼」,不是登入密碼,需先在 Google 帳戶開啟兩步驟驗證後才能產生:[myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)。`EMAIL_TO` 是報表收件地址。三個變數任一未設定,程式會自動略過寄信,不影響抓取與匯出報表。
 
 ## 使用
 
@@ -106,7 +107,7 @@ python main.py 20260713   # 抓指定日期(格式 YYYYMMDD)
 2. 印出自營商近 6 日買賣方向,連續同向達 5 日以上會提示強烈訊號
 3. 匯出 `data/chip_report_YYYYMMDD.xlsx`
 4. 匯出 `data/weekly_scan_YYYYMMDD.json`
-5. 寄出報表(Excel + JSON 附件)至 `config.EMAIL_TO`(需先完成上方「設定寄信功能」步驟)
+5. 寄出報表(Excel + JSON 附件)至 `.env` 裡設定的 `EMAIL_TO`(需先完成上方「設定寄信功能」步驟)
 
 `data/` 底下的輸出檔案(資料庫、Excel、JSON)不會進 git(已列入 `.gitignore`),每台機器/每次 clone 都是從零開始累積歷史。
 
@@ -159,7 +160,8 @@ for row in conn.execute('SELECT * FROM stock_chip ORDER BY trade_date DESC LIMIT
 - `WATCHLIST`:觀察名單(股票代號 → 名稱),個股相關 provider 只抓這裡列出的標的
 - `DB_PATH` / `EXCEL_PATH` / `JSON_PATH`:輸出檔案路徑(實際匯出檔名會自動加上日期後綴)
 - `SLEEP_SEC`:每個 provider 抓取後的間隔秒數,避免對 API 過於頻繁請求
-- `EMAIL_TO`:報表收件地址
+
+收件地址 `EMAIL_TO` 不在 `config.py` 裡,而是跟寄信帳密一起放在 `.env`(見上方「設定寄信功能」),避免個人信箱進版控。
 
 ## 架構
 
