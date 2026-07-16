@@ -103,16 +103,21 @@ def build_weekly_scan(db_path):
     if _table_exists(conn, "market_chip"):
         streak = dealer_streak(conn, 6)
         if streak:
+            # streak 是 DESC(最新日在前),從最新日往回數,遇到變號就停
             signs = ["買" if v > 0 else "賣" for _, v in streak]
-            uniform_run = len(set(signs)) == 1
+            streak_days = 1
+            for s in signs[1:]:
+                if s != signs[0]:
+                    break
+                streak_days += 1
             result["dealer_self_streak"] = {
                 "target": "market_dealer_self",
                 "source": "TWSE-BFI82U",
                 "unit": "億元",
                 "recent": [{"trade_date": _iso(d), "net": v} for d, v in streak],
-                "streak_days": len(signs) if uniform_run else 1,
+                "streak_days": streak_days,
                 "streak_direction": signs[0] if signs else None,
-                "signal": f"連{len(signs)}{signs[0]}超" if uniform_run and len(signs) >= 5 else None,
+                "signal": f"連{streak_days}{signs[0]}超" if streak_days >= 5 else None,
             }
             verified.append("dealer_self_streak")
 
