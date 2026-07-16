@@ -8,7 +8,7 @@
 - 自營商(自行買賣)連續買/賣超天數判斷,連續 5 日以上同向視為強烈訊號
 - 匯出 Excel 報表(`data/chip_report_YYYYMMDD.xlsx`),每張資料表一個分頁,依日期新到舊排序
 - 匯出正規化 JSON(`data/weekly_scan_YYYYMMDD.json`),只放實際抓到的資料,抓不到的欄位列在 `data_quality.unavailable`,不會用假數字填充
-- 執行完畢後自動寄出報表(Excel + JSON 附件),未設定寄信帳密則自動略過,不中斷主流程
+- 執行完畢後自動寄出報表(Excel + JSON 附件),未設定寄信帳密則自動略過;寄信本身失敗(例如帳密錯誤、網路問題)也只會印警告,不會讓整支程式以錯誤結束——資料在寄信之前就已經寫入硬碟,寄信只是錦上添花
 
 ## 原理
 
@@ -31,11 +31,15 @@
 
 `core/export_json.py` 組出的 JSON 只放「實際查得到」的欄位。查不到的項目(例如大盤股價淨值比沒有官方 API、休市與抓取失敗目前無法區分)會明確列在 `data_quality.unavailable` 並附上原因,而不是用 0 或估計值填充。這是為了給 AI 或人判讀時能明確分辨「沒有這個資訊」跟「這個資訊是 0」,避免誤判。
 
-### 4. 籌碼訊號判斷
+### 4. 落後資料:各自回報自己的日期,不硬湊 anchor
+
+`export_json.py` 以 `market_chip`(大盤三大法人)的最新日期當作整份報告的 `as_of` anchor,但不是每個資料源都能跟上這個日期——TAIFEX 期貨未平倉 API 沒有日期參數,永遠只回傳「它自己的」最新交易日;TWSE 個股三大法人/收盤價 API 有時也會比大盤指數慢好幾天更新。這些區塊(`foreign_futures_oi`、`watchlist`)因此改以**各自資料源本身最新的一天**為準,不要求跟 anchor 同一天,並在每筆資料上明確標出自己的 `trade_date`/`as_of`,避免把過期資料誤標成當天的。早期版本曾經要求同一天才合併,結果只要任一資料源更新較慢,整個區塊就會在 JSON 裡完全消失——即使 Excel(不做日期篩選,整表原樣匯出)裡明明還看得到。
+
+### 5. 籌碼訊號判斷
 
 `core/analysis.py` 的 `dealer_streak` 抓出大盤自營商(自行買賣)最近 N 日的買賣方向,`main.py` 與 `export_json.py` 各自判斷是否連續 5 日以上同向——這是目前唯一內建的訊號規則,選擇自營商自行買賣是因為它反映了自營商真正的方向性部位(相對於避險部位)。
 
-### 5. 執行流程
+### 6. 執行流程
 
 ```text
 main.py run()
@@ -47,8 +51,10 @@ main.py run()
   ├─ dealer_streak()      判斷自營商連續方向,印出主控台提示
   ├─ export_excel()       整庫匯出成 Excel,一表一分頁
   ├─ export_weekly_scan() 整庫組成正規化 JSON
-  └─ send_report()        寄出 Excel + JSON(未設定信箱則自動略過)
+  └─ send_report()        寄出 Excel + JSON(未設定信箱則略過;寄信失敗只印警告,不中斷 run)
 ```
+
+> `margin_balance.py`(個股融資融券)與 `market_margin.py`(全市場融資融券)其實是同一支 TWSE `MI_MARGN` API 回應裡的兩張表(`tables[1]` 個股明細、`tables[0]` 全市場彙總),兩個 provider 透過 `providers/_mi_margn.py` 共用同一次請求的快取結果,同一天只會真的打一次 API,不會因為拆成兩個 provider 就發送兩次重複請求。
 
 ## 安裝
 
@@ -151,7 +157,7 @@ for row in conn.execute('SELECT * FROM stock_chip ORDER BY trade_date DESC LIMIT
 | `stock_inst.py` | `stock_chip` | 觀察名單個股三大法人買賣超 | TWSE T86 |
 | `margin_balance.py` | `margin_balance` | 觀察名單個股融資融券餘額 | TWSE MI_MARGN |
 | `stock_quote.py` | `stock_quote` | 觀察名單個股收盤價/本益比/股價淨值比 | TWSE BWIBBU_d |
-| `foreign_futures_oi.py` | `foreign_futures_oi` | 外資期貨未平倉(僅回傳最新交易日) | TAIFEX OpenAPI |
+| `foreign_futures_oi.py` | `foreign_futures_oi` | 三大法人(外資及陸資/投信/自營商)期貨未平倉,可比對土洋對作(僅回傳最新交易日) | TAIFEX OpenAPI |
 
 ## 設定
 
@@ -171,12 +177,13 @@ config.py             觀察名單與路徑設定
 core/
   base.py             DataProvider 抽象基底類別
   registry.py         自動掃描 providers/ 底下的模組並實例化
-  storage.py          SQLite 存取(建表、upsert)
+  storage.py          SQLite 存取(建表、upsert、schema 變更時自動搬遷舊資料)
   analysis.py         籌碼分析(如自營商連續方向)
   report.py           匯出 Excel
   export_json.py      組出給 AI 判讀用的正規化 JSON
   mailer.py           寄送報表(Gmail SMTP,讀取 .env 帳密)
 providers/            各資料源實作,每個檔案對應一個 DataProvider 子類別
+  _mi_margn.py        內部共用模組(非 DataProvider):margin_balance/market_margin 共用的 MI_MARGN 請求快取
 ```
 
 ## 新增資料源
