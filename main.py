@@ -53,7 +53,10 @@ def run(date_str=None):
     export_weekly_scan(config.DB_PATH, json_path)
     print(f"🧾 判讀用 JSON 已輸出: {json_path}")
 
-    send_report([json_path, excel_path])
+    try:
+        send_report([json_path, excel_path])
+    except Exception as e:
+        print(f"⚠️ 寄信失敗,但資料已正確寫入 {excel_path} / {json_path}:{e}")
 
 
 if __name__ == "__main__":

@@ -145,25 +145,32 @@ def build_weekly_scan(db_path):
             }
             verified.append("foreign_futures_oi")
 
-    # watchlist:個股三大法人 + 融資融券(同 anchor 日期才合併,對不上就不硬湊)
-    if anchor and _table_exists(conn, "stock_chip"):
+    # watchlist:個股三大法人 + 融資融券 + 收盤價
+    # 以 stock_chip 自己最新的一天為準,不要求和大盤 anchor 同一天——
+    # 跟 foreign_futures_oi 一樣,TWSE 個股三大法人/收盤價 API 常常比大盤指數
+    # 慢好幾天更新,硬要求同天會讓整段資料在 API 落後時消失不見。
+    # 每筆 entry 仍帶自己的 trade_date,不會誤標成 anchor 當天的資料。
+    if _table_exists(conn, "stock_chip"):
+        stock_latest = conn.execute("SELECT MAX(trade_date) FROM stock_chip").fetchone()[0]
         stock_rows = conn.execute(
-            "SELECT * FROM stock_chip WHERE trade_date = ?", (anchor,)
-        ).fetchall()
+            "SELECT * FROM stock_chip WHERE trade_date = ?", (stock_latest,)
+        ).fetchall() if stock_latest else []
         margin_by_id = {}
-        if _table_exists(conn, "margin_balance"):
+        if stock_latest and _table_exists(conn, "margin_balance"):
             margin_by_id = {
                 r["stock_id"]: r for r in conn.execute(
-                    "SELECT * FROM margin_balance WHERE trade_date = ?", (anchor,)
+                    "SELECT * FROM margin_balance WHERE trade_date = ?", (stock_latest,)
                 ).fetchall()
             }
         quote_by_id = {}
         if _table_exists(conn, "stock_quote"):
-            quote_by_id = {
-                r["stock_id"]: r for r in conn.execute(
-                    "SELECT * FROM stock_quote WHERE trade_date = ?", (anchor,)
-                ).fetchall()
-            }
+            quote_latest = conn.execute("SELECT MAX(trade_date) FROM stock_quote").fetchone()[0]
+            if quote_latest:
+                quote_by_id = {
+                    r["stock_id"]: r for r in conn.execute(
+                        "SELECT * FROM stock_quote WHERE trade_date = ?", (quote_latest,)
+                    ).fetchall()
+                }
         watchlist = []
         for r in stock_rows:
             entry = {

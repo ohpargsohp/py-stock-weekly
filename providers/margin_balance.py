@@ -1,12 +1,10 @@
 import logging
 
-import requests
-
 import config
 from core.base import DataProvider
+from providers._mi_margn import fetch_mi_margn
 
 log = logging.getLogger(__name__)
-HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 
 def _to_num(s):
@@ -14,7 +12,8 @@ def _to_num(s):
 
 
 class MarginBalanceProvider(DataProvider):
-    """個股融資融券餘額(MI_MARGN),僅取 config.WATCHLIST 內的股票。"""
+    """個股融資融券餘額(MI_MARGN),僅取 config.WATCHLIST 內的股票。
+    跟 market_margin.py 共用同一個 API 回應(見 providers/_mi_margn.py)。"""
 
     name = "margin_balance"
     pk = ["trade_date", "stock_id"]
@@ -29,10 +28,7 @@ class MarginBalanceProvider(DataProvider):
     }
 
     def fetch(self, date_str):
-        url = f"https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN?response=json&date={date_str}&selectType=ALL"
-        r = requests.get(url, headers=HEADERS, timeout=20)
-        r.encoding = "utf-8"
-        j = r.json()
+        j = fetch_mi_margn(date_str)
         if j.get("stat") != "OK" or len(j.get("tables", [])) < 2:
             log.warning(f"{date_str} 融資融券無資料(可能休市)")
             return []

@@ -1,11 +1,9 @@
 import logging
 
-import requests
-
 from core.base import DataProvider
+from providers._mi_margn import fetch_mi_margn
 
 log = logging.getLogger(__name__)
-HEADERS = {"User-Agent": "Mozilla/5.0"}
 
 
 def _to_num(s):
@@ -15,7 +13,7 @@ def _to_num(s):
 class MarketMarginProvider(DataProvider):
     """全市場融資融券餘額(散戶槓桿總量),同一支 MI_MARGN API 的 tables[0]
     (跟 providers/margin_balance.py 抓的 tables[1] 個股明細是同一次查詢的兩張表,
-    但 provider 之間刻意各自獨立發送請求,不共享狀態)。"""
+    透過 providers/_mi_margn.py 共用快取,同一天只打一次 API)。"""
 
     name = "market_margin"
     pk = ["trade_date"]
@@ -30,10 +28,7 @@ class MarketMarginProvider(DataProvider):
     }
 
     def fetch(self, date_str):
-        url = f"https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN?response=json&date={date_str}&selectType=ALL"
-        r = requests.get(url, headers=HEADERS, timeout=20)
-        r.encoding = "utf-8"
-        j = r.json()
+        j = fetch_mi_margn(date_str)
         if j.get("stat") != "OK" or len(j.get("tables", [])) < 1:
             log.warning(f"{date_str} 全市場融資融券無資料(可能休市)")
             return []
