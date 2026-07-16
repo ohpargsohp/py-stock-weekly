@@ -121,23 +121,29 @@ def build_weekly_scan(db_path):
             }
             verified.append("dealer_self_streak")
 
-    # 外資期貨未平倉(TAIFEX API 只給最新一個交易日,不一定等於 anchor 日期)
+    # 三大法人期貨未平倉(TAIFEX API 只給最新一個交易日,不一定等於 anchor 日期)
     if _table_exists(conn, "foreign_futures_oi"):
         fut_latest = conn.execute("SELECT MAX(trade_date) FROM foreign_futures_oi").fetchone()[0]
         if fut_latest:
             rows = conn.execute("""
-                SELECT contract_code, oi_long, oi_short, oi_net
+                SELECT contract_code, institution_type, oi_long, oi_short, oi_net
                 FROM foreign_futures_oi WHERE trade_date = ?
             """, (fut_latest,)).fetchall()
-            headline = next((r for r in rows if r["contract_code"] == "臺股期貨"), None)
+            # headline 沿用舊定義:臺股期貨的外資淨未平倉(最常被拿來當風向指標)
+            headline = next((
+                r for r in rows
+                if r["contract_code"] == "臺股期貨" and r["institution_type"] == "外資及陸資"
+            ), None)
             result["foreign_futures_oi"] = {
                 "as_of": _iso(fut_latest),
                 "source": "TAIFEX-MarketDataOfMajorInstitutionalTradersDetailsOfFuturesContractsBytheDate",
                 "unit": "口",
                 "headline_contract": "臺股期貨",
+                "headline_institution": "外資及陸資",
                 "headline_net": headline["oi_net"] if headline else None,
                 "by_contract": [{
                     "contract_code": r["contract_code"],
+                    "institution_type": r["institution_type"],
                     "oi_long": r["oi_long"],
                     "oi_short": r["oi_short"],
                     "oi_net": r["oi_net"],

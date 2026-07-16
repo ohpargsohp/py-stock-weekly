@@ -41,6 +41,7 @@ COLUMN_NAMES = {
     "pe": "本益比",
     "pb": "股價淨值比",
     "contract_code": "契約名稱",
+    "institution_type": "法人類別",
     "oi_long": "多方未平倉",
     "oi_short": "空方未平倉",
     "oi_net": "淨未平倉",

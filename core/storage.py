@@ -10,6 +10,21 @@ class Storage:
     def ensure_table(self, p):
         cols = ", ".join(f"{k} {v}" for k, v in p.schema.items())
         pk = ", ".join(p.pk)
+        existing_cols = [r[1] for r in self.conn.execute(f"PRAGMA table_info({p.name})")]
+        if existing_cols and set(p.schema.keys()) - set(existing_cols):
+            # provider 的 schema/pk 改了(例如新增欄位),既有表結構跟不上——
+            # SQLite 不能直接改 PRIMARY KEY,用「建新表、搬舊資料、換名」升級。
+            # 新欄位在舊資料上補 NULL,不用假資料填充。
+            shared = [k for k in p.schema if k in existing_cols]
+            self.conn.execute(f"ALTER TABLE {p.name} RENAME TO {p.name}_old")
+            self.conn.execute(
+                f"CREATE TABLE {p.name} ({cols}, PRIMARY KEY ({pk}))")
+            self.conn.execute(
+                f"INSERT INTO {p.name} ({','.join(shared)}) "
+                f"SELECT {','.join(shared)} FROM {p.name}_old")
+            self.conn.execute(f"DROP TABLE {p.name}_old")
+            self.conn.commit()
+            return
         self.conn.execute(
             f"CREATE TABLE IF NOT EXISTS {p.name} ({cols}, PRIMARY KEY ({pk}))")
         self.conn.commit()
