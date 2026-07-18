@@ -8,10 +8,6 @@ from core.base import DataProvider
 log = logging.getLogger(__name__)
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-# 月營收依法須在每月10日前公告,只在每月1~15日(含緩衝)才呼叫 API,
-# 其餘天數直接回空清單——這支 API 沒有回溯查詢,平常打了也只會拿到同一期舊資料。
-FETCH_DAY_RANGE = (1, 15)
-
 
 def _to_num_or_none(s):
     s = str(s).strip()
@@ -56,11 +52,6 @@ class MonthlyRevenueProvider(DataProvider):
     }
 
     def fetch(self, date_str):
-        day = int(date_str[6:8])
-        lo, hi = FETCH_DAY_RANGE
-        if not (lo <= day <= hi):
-            return []
-
         url = "https://openapi.twse.com.tw/v1/opendata/t187ap05_L"
         try:
             r = requests.get(url, headers=HEADERS, timeout=20)

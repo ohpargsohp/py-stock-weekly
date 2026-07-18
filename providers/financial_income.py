@@ -8,12 +8,6 @@ from core.base import DataProvider
 log = logging.getLogger(__name__)
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-# 季報/年報依法公告截止月份為 3(年報)、5(Q1)、8(Q2)、11(Q3),
-# 只在這幾個月份才呼叫 API,其餘月份直接回空清單——這支 API 沒有回溯查詢,
-# 平常打了也只會拿到同一期舊資料。目前只涵蓋觀察名單裡的一般業公司,
-# ETF(如 0050)沒有損益表概念,自然不會出現在回應裡。
-FETCH_MONTHS = {3, 4, 5, 8, 11}
-
 
 def _to_num_or_none(s):
     s = str(s).strip()
@@ -56,10 +50,6 @@ class FinancialIncomeProvider(DataProvider):
     }
 
     def fetch(self, date_str):
-        month = int(date_str[4:6])
-        if month not in FETCH_MONTHS:
-            return []
-
         url = "https://openapi.twse.com.tw/v1/opendata/t187ap06_L_ci"
         try:
             r = requests.get(url, headers=HEADERS, timeout=20)

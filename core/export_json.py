@@ -2,13 +2,7 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from core.analysis import (
-    dealer_streak,
-    industry_avg_pe,
-    pe_river,
-    revenue_streak,
-    watchlist_industries,
-)
+from core.analysis import dealer_streak, pe_river, revenue_streak
 
 TW_TZ = timezone(timedelta(hours=8))
 
@@ -37,6 +31,9 @@ def build_weekly_scan(db_path):
         "market_pb(大盤股價淨值比)——TWSE 沒有官方每日 API,要算需自行對全市場個股做市值加權,"
         "目前沒有流通股數/市值資料源可用,故不提供(不做未加權簡易平均,避免誤導)",
         "market_closed 明確標記——目前『當天沒有資料』可能是休市,也可能是抓取失敗,兩者尚未區分",
+        "industry_avg_pe(同業估值比較)——觀察名單每個產業通常只有 2~3 檔標的,"
+        "屬極小樣本,對照組不具統計意義,直接拿來判斷個股「相對同業低估/高估」會誤導;"
+        "需要全市場同產業成分股 + 市值加權才有參考價值,目前沒有全市場 PE + 產業對照表資料源,故不提供",
     ]
 
     anchor = conn.execute("SELECT MAX(trade_date) FROM market_chip").fetchone()[0] \
@@ -201,7 +198,16 @@ def build_weekly_scan(db_path):
                     WHERE period = (SELECT MAX(period) FROM financial_income WHERE stock_id = fi.stock_id)
                 """).fetchall()
             }
-        has_revenue_momentum = has_gross_margin = has_pe_river = False
+        price_action_by_id = {}
+        if _table_exists(conn, "stock_price_action"):
+            price_latest = conn.execute("SELECT MAX(trade_date) FROM stock_price_action").fetchone()[0]
+            if price_latest:
+                price_action_by_id = {
+                    r["stock_id"]: r for r in conn.execute(
+                        "SELECT * FROM stock_price_action WHERE trade_date = ?", (price_latest,)
+                    ).fetchall()
+                }
+        has_revenue_momentum = has_gross_margin = has_pe_river = has_price_action = False
         watchlist = []
         for r in stock_rows:
             entry = {
@@ -233,6 +239,26 @@ def build_weekly_scan(db_path):
                     "pe": q["pe"],
                     "pb": q["pb"],
                 })
+
+            pa = price_action_by_id.get(r["stock_id"])
+            if pa:
+                # 獨立帶自己的 trade_date/close,不強制跟 stock_quote 同一天——
+                # 兩支 provider 來源不同 API,理由同本區塊其他低頻資料的落後處理原則。
+                entry["price_action"] = {
+                    "trade_date": _iso(pa["trade_date"]),
+                    "source": "TWSE-MI_INDEX",
+                    "open": pa["open"],
+                    "high": pa["high"],
+                    "low": pa["low"],
+                    "close": pa["close"],
+                    "change_pts": pa["change_pts"],
+                    "change_pct": pa["change_pct"],
+                    "unit_volume": "張",
+                    "volume_lots": pa["volume_lots"],
+                    "unit_turnover": "億元",
+                    "turnover_yi": pa["turnover_yi"],
+                }
+                has_price_action = True
 
             rev = revenue_by_id.get(r["stock_id"])
             if rev:
@@ -288,24 +314,8 @@ def build_weekly_scan(db_path):
                 verified.append("watchlist[].gross_margin")
             if has_pe_river:
                 verified.append("watchlist[].pe_river")
-
-    # 產業平均PE——僅觀察名單內同產業股票互相比較,不是全市場產業平均
-    # (全市場需要額外抓全市場 PE + 產業對照表,目前規模不做)
-    if _table_exists(conn, "monthly_revenue") and _table_exists(conn, "stock_quote"):
-        industries = watchlist_industries(conn)
-        avg_pe = industry_avg_pe(conn, industries)
-        if avg_pe:
-            result["industry_avg_pe"] = {
-                "scope": "watchlist_only",
-                "note": "僅觀察名單內同產業股票互相取PE平均,不是全市場產業平均",
-                "by_industry": avg_pe,
-            }
-            verified.append("industry_avg_pe(watchlist_only)")
-        else:
-            unavailable.append(
-                "industry_avg_pe(全市場)——TWSE 無現成端點,且觀察名單內每個產業樣本數不足"
-                "(需至少2檔同產業標的且已抓過月營收以取得產業分類),故不提供"
-            )
+            if has_price_action:
+                verified.append("watchlist[].price_action")
 
     result["data_quality"] = {"verified": verified, "unavailable": unavailable}
 

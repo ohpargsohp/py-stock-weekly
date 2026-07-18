@@ -14,6 +14,7 @@ SHEET_NAMES = {
     "foreign_futures_oi": "外資期貨未平倉",
     "monthly_revenue": "月營收動能",
     "financial_income": "財報毛利率",
+    "stock_price_action": "個股價格結構",
 }
 
 COLUMN_NAMES = {
@@ -65,6 +66,11 @@ COLUMN_NAMES = {
     "net_income": "本期淨利(仟元)",
     "net_margin": "淨利率(%)",
     "eps": "每股盈餘(元)",
+    "open": "開盤價",
+    "high": "最高價",
+    "low": "最低價",
+    "volume_lots": "成交量(張)",
+    "turnover_yi": "成交金額(億元)",
 }
 
 

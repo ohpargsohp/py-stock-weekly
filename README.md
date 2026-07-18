@@ -7,9 +7,9 @@
 - 抓取大盤與個股籌碼資料,以 SQLite 累積歷史(以日期為主鍵,重複執行會 upsert,不會重複灌資料)
 - 自營商(自行買賣)連續買/賣超天數判斷,連續 5 日以上同向視為強烈訊號
 - 月營收動能:YoY/MoM 增減幅(TWSE 直接提供)+ 連續正/負成長月數(自行累積歷史算出)
-- 毛利率/營益率/淨利率:自財報(綜合損益表)原始金額自行計算,涵蓋一般業公司
+- 毛利率/營益率/淨利率/EPS:自財報(綜合損益表)原始金額自行計算,涵蓋一般業公司
+- 個股價格結構:開高低收、單日漲跌幅、成交量/成交金額,支援乖離率、量價結構等技術面判讀
 - PE 河流圖(自建版):每天累積個股 PE,算出目前 PE 落在自己歷史分布的第幾百分位、歷史極值——不是官方河流圖,樣本量取決於累積了多久(可用 `scripts/backfill_pe_history.py` 一次回補歷史)
-- 產業平均 PE(僅觀察名單內):同產業的觀察名單股票互相取 PE 平均,不是全市場產業平均
 - 匯出 Excel 報表(`data/chip_report_YYYYMMDD.xlsx`),每張資料表一個分頁,依日期新到舊排序
 - 匯出正規化 JSON(`data/weekly_scan_YYYYMMDD.json`),只放實際抓到的資料,抓不到的欄位列在 `data_quality.unavailable`,不會用假數字填充
 - 執行完畢後自動寄出報表(Excel + JSON 附件),未設定寄信帳密則自動略過;寄信本身失敗(例如帳密錯誤、網路問題)也只會印警告,不會讓整支程式以錯誤結束——資料在寄信之前就已經寫入硬碟,寄信只是錦上添花
@@ -43,17 +43,17 @@
 
 `core/analysis.py` 的 `dealer_streak` 抓出大盤自營商(自行買賣)最近 N 日的買賣方向,`main.py` 與 `export_json.py` 各自判斷是否連續 5 日以上同向——這是目前唯一內建的訊號規則,選擇自營商自行買賣是因為它反映了自營商真正的方向性部位(相對於避險部位)。
 
-### 6. 低頻資料(月營收/財報)不天天真的打 API
+### 6. 低頻資料(月營收/財報)每次執行都會打,但常常拿到重複資料
 
-`monthly_revenue.py`(月營收)與 `financial_income.py`(財報毛利率)背後的 TWSE OpenAPI 端點沒有回溯查詢,永遠只回傳「目前最新一期」,而且月營收/財報依法只在特定期間公告。這支程式雖然設計成每天跑一次,但這兩個 provider 的 `fetch()` 會先檢查日期:月營收只在每月 1~15 日(公告截止日+緩衝)才真的呼叫 API,財報只在 3、4、5、8、11 月(年報/Q1/Q2/Q3 公告月份)才呼叫,其餘時間直接回空清單,不做沒有意義的重複請求。財報目前只涵蓋一般業公司(觀察名單標的皆屬此類),金融、證券、保險業的損益表格式不同,暫不支援。
+`monthly_revenue.py`(月營收)與 `financial_income.py`(財報毛利率)背後的 TWSE OpenAPI 端點沒有回溯查詢,永遠只回傳「目前最新一期」,而且月營收/財報依法只在特定期間公告。這兩個 provider 的 `fetch()` 不做日期判斷,每次執行都會照打——大部分日子只是把同一期資料原樣 upsert 一次(靠 `pk` 冪等,不會產生重複列),但一旦新一期資料公告,下一次執行就能立刻抓到,不用等到特定月份/日期區間才有機會更新。財報目前只涵蓋一般業公司(觀察名單標的皆屬此類),金融、證券、保險業的損益表格式不同,暫不支援。
 
 ### 7. PE 河流圖是自建的,不是抓來的
 
 TWSE 沒有歷史 PE 河流圖或百分位 API,`core/analysis.py` 的 `pe_river()` 純粹用這支程式自己每天累積在 `stock_quote` 表裡的 PE 資料算出目前 PE 的歷史百分位與極值。這代表功能剛裝好時樣本量幾乎是 0,要嘛讓程式每天正常執行慢慢累積,要嘛跑一次 `scripts/backfill_pe_history.py` 一次性回補過去幾年的每日 PE。JSON 裡的 `pe_river.note` 會依樣本天數附上警語(少於 60 天時明講百分位不具參考意義),避免把統計雜訊當成訊號。
 
-### 8. 產業平均 PE 只在觀察名單內比較
+### 8. 產業平均 PE 刻意沒有做
 
-「產業別」來自 `monthly_revenue` 表(TWSE 月營收 API 本身就附產業分類),`industry_avg_pe()` 只把觀察名單裡同產業的股票互相取 PE 平均——刻意不去抓全市場約 1700 檔股票的 PE 做真正的產業平均,因為那需要額外的全市場資料源與產業對照表,資料量會暴增。JSON 裡的 `industry_avg_pe.scope` 明確標示 `"watchlist_only"`,不會假裝這是全市場數字。
+早期版本曾經把觀察名單裡同產業的股票互相取 PE 平均(標示 `scope: "watchlist_only"`),後來拿掉了:觀察名單每個產業通常只有 2~3 檔標的,樣本數小到不具統計意義,直接拿極小樣本平均去判斷個股「相對同業低估/高估」反而容易誤判(例如把單一權值股的 PE 拿去跟一兩檔小型股平均比較,結論會失真)。真正有意義的產業平均需要全市場同產業成分股 + 市值加權,目前沒有這個資料源,所以明確列在 `data_quality.unavailable` 說明原因,不用小樣本數字冒充有參考價值的指標(原則同第 3 點「寧缺勿濫」)。
 
 ### 9. 執行流程
 
@@ -127,7 +127,7 @@ python main.py 20260713   # 抓指定日期(格式 YYYYMMDD)
 
 ### 執行時會發生什麼
 
-1. 掃描 `providers/` 下所有資料源,逐一抓取當日資料並 upsert 進 `data/chip.db`,主控台會印出每個 provider 的抓取結果(月營收/財報只在特定期間才真的呼叫 API,見上方「原理」第 6 點)
+1. 掃描 `providers/` 下所有資料源,逐一抓取當日資料並 upsert 進 `data/chip.db`,主控台會印出每個 provider 的抓取結果(月營收/財報每次都會呼叫 API,但常拿到與前次相同的最新一期資料,見上方「原理」第 6 點)
 2. 印出自營商近 6 日買賣方向,連續同向達 5 日以上會提示強烈訊號
 3. 印出觀察名單個股月營收 YoY 連續成長/衰退達 3 個月以上的提示
 4. 印出觀察名單個股 PE 落在自建歷史極端百分位(≤10 或 ≥90,且樣本 ≥60 天)的提示
@@ -188,9 +188,10 @@ for row in conn.execute('SELECT * FROM stock_chip ORDER BY trade_date DESC LIMIT
 | `stock_inst.py` | `stock_chip` | 觀察名單個股三大法人買賣超 | TWSE T86 |
 | `margin_balance.py` | `margin_balance` | 觀察名單個股融資融券餘額 | TWSE MI_MARGN |
 | `stock_quote.py` | `stock_quote` | 觀察名單個股收盤價/本益比/股價淨值比 | TWSE BWIBBU_d |
+| `stock_price_action.py` | `stock_price_action` | 觀察名單個股開高低收、單日漲跌點數/幅度、成交量/成交金額 | TWSE MI_INDEX(type=ALLBUT0999) |
 | `foreign_futures_oi.py` | `foreign_futures_oi` | 三大法人(外資及陸資/投信/自營商)期貨未平倉,可比對土洋對作(僅回傳最新交易日) | TAIFEX OpenAPI |
-| `monthly_revenue.py` | `monthly_revenue` | 觀察名單個股月營收、YoY/MoM 增減幅、產業別(只在每月 1~15 日抓) | TWSE OpenAPI t187ap05_L |
-| `financial_income.py` | `financial_income` | 觀察名單個股(一般業)毛利率/營益率/淨利率/EPS(只在 3、4、5、8、11 月抓) | TWSE OpenAPI t187ap06_L_ci |
+| `monthly_revenue.py` | `monthly_revenue` | 觀察名單個股月營收、YoY/MoM 增減幅、產業別 | TWSE OpenAPI t187ap05_L |
+| `financial_income.py` | `financial_income` | 觀察名單個股(一般業)毛利率/營益率/淨利率/EPS | TWSE OpenAPI t187ap06_L_ci |
 
 ### 自行衍生的指標(非官方 API 直接提供)
 
@@ -200,7 +201,6 @@ for row in conn.execute('SELECT * FROM stock_chip ORDER BY trade_date DESC LIMIT
 | --- | --- | --- |
 | 營收 YoY 連續成長/衰退月數 | 累積 `monthly_revenue` 歷史,逐月比對 YoY 正負號 | 需要跑過夠多個月才有意義 |
 | PE 河流圖(百分位/極值) | 累積 `stock_quote.pe` 歷史,算目前 PE 在自己歷史分布的排名 | 自建,非官方河流圖;可用 `scripts/backfill_pe_history.py` 回補加速 |
-| 產業平均 PE | 依 `monthly_revenue.industry` 分組,組內觀察名單股票 PE 取平均 | 僅觀察名單內比較,非全市場產業平均 |
 
 ## 設定
 
