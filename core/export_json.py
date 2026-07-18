@@ -2,7 +2,13 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from core.analysis import dealer_streak
+from core.analysis import (
+    dealer_streak,
+    industry_avg_pe,
+    pe_river,
+    revenue_streak,
+    watchlist_industries,
+)
 
 TW_TZ = timezone(timedelta(hours=8))
 
@@ -177,6 +183,25 @@ def build_weekly_scan(db_path):
                         "SELECT * FROM stock_quote WHERE trade_date = ?", (quote_latest,)
                     ).fetchall()
                 }
+        # 月營收/財報屬低頻資料,各自取每檔股票自己最新一期,不要求跟大盤/個股
+        # 三大法人同一天——理由同 foreign_futures_oi、watchlist 本身的落後資料處理原則。
+        revenue_by_id = {}
+        if _table_exists(conn, "monthly_revenue"):
+            revenue_by_id = {
+                r["stock_id"]: r for r in conn.execute("""
+                    SELECT * FROM monthly_revenue mr
+                    WHERE period = (SELECT MAX(period) FROM monthly_revenue WHERE stock_id = mr.stock_id)
+                """).fetchall()
+            }
+        financial_by_id = {}
+        if _table_exists(conn, "financial_income"):
+            financial_by_id = {
+                r["stock_id"]: r for r in conn.execute("""
+                    SELECT * FROM financial_income fi
+                    WHERE period = (SELECT MAX(period) FROM financial_income WHERE stock_id = fi.stock_id)
+                """).fetchall()
+            }
+        has_revenue_momentum = has_gross_margin = has_pe_river = False
         watchlist = []
         for r in stock_rows:
             entry = {
@@ -208,10 +233,79 @@ def build_weekly_scan(db_path):
                     "pe": q["pe"],
                     "pb": q["pb"],
                 })
+
+            rev = revenue_by_id.get(r["stock_id"])
+            if rev:
+                streak_rows = revenue_streak(conn, r["stock_id"], 6)
+                momentum = {
+                    "period": rev["period"],
+                    "source": "TWSE-t187ap05_L",
+                    "unit": "仟元",
+                    "revenue": rev["revenue"],
+                    "revenue_mom_pct": rev["revenue_mom_pct"],
+                    "revenue_yoy_pct": rev["revenue_yoy_pct"],
+                }
+                if streak_rows:
+                    signs = ["正" if v > 0 else "負" for _, v in streak_rows]
+                    streak_months = 1
+                    for s in signs[1:]:
+                        if s != signs[0]:
+                            break
+                        streak_months += 1
+                    momentum["yoy_streak_months"] = streak_months
+                    momentum["yoy_streak_direction"] = signs[0]
+                entry["revenue_momentum"] = momentum
+                has_revenue_momentum = True
+
+            fin = financial_by_id.get(r["stock_id"])
+            if fin:
+                entry["gross_margin"] = {
+                    "period": fin["period"],
+                    "source": "TWSE-t187ap06_L_ci",
+                    "gross_margin_pct": fin["gross_margin"],
+                    "operating_margin_pct": fin["operating_margin"],
+                    "net_margin_pct": fin["net_margin"],
+                    "eps": fin["eps"],
+                }
+                has_gross_margin = True
+
+            river = pe_river(conn, r["stock_id"])
+            if river:
+                river = dict(river)
+                river["note"] = ("自建歷史資料庫統計,非官方河流圖;樣本數 < 60 天時"
+                                  "百分位不具參考意義") if river["sample_days"] < 60 else \
+                                 "自建歷史資料庫統計,非官方河流圖"
+                entry["pe_river"] = river
+                has_pe_river = True
+
             watchlist.append(entry)
         if watchlist:
             result["watchlist"] = watchlist
             verified.append("watchlist")
+            if has_revenue_momentum:
+                verified.append("watchlist[].revenue_momentum")
+            if has_gross_margin:
+                verified.append("watchlist[].gross_margin")
+            if has_pe_river:
+                verified.append("watchlist[].pe_river")
+
+    # 產業平均PE——僅觀察名單內同產業股票互相比較,不是全市場產業平均
+    # (全市場需要額外抓全市場 PE + 產業對照表,目前規模不做)
+    if _table_exists(conn, "monthly_revenue") and _table_exists(conn, "stock_quote"):
+        industries = watchlist_industries(conn)
+        avg_pe = industry_avg_pe(conn, industries)
+        if avg_pe:
+            result["industry_avg_pe"] = {
+                "scope": "watchlist_only",
+                "note": "僅觀察名單內同產業股票互相取PE平均,不是全市場產業平均",
+                "by_industry": avg_pe,
+            }
+            verified.append("industry_avg_pe(watchlist_only)")
+        else:
+            unavailable.append(
+                "industry_avg_pe(全市場)——TWSE 無現成端點,且觀察名單內每個產業樣本數不足"
+                "(需至少2檔同產業標的且已抓過月營收以取得產業分類),故不提供"
+            )
 
     result["data_quality"] = {"verified": verified, "unavailable": unavailable}
 

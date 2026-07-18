@@ -12,6 +12,8 @@ SHEET_NAMES = {
     "margin_balance": "個股融資融券",
     "stock_quote": "個股收盤價",
     "foreign_futures_oi": "外資期貨未平倉",
+    "monthly_revenue": "月營收動能",
+    "financial_income": "財報毛利率",
 }
 
 COLUMN_NAMES = {
@@ -45,6 +47,24 @@ COLUMN_NAMES = {
     "oi_long": "多方未平倉",
     "oi_short": "空方未平倉",
     "oi_net": "淨未平倉",
+    "period": "期別",
+    "industry": "產業別",
+    "revenue": "營業收入(仟元)",
+    "revenue_prev_month": "上月營收(仟元)",
+    "revenue_last_year_month": "去年當月營收(仟元)",
+    "revenue_mom_pct": "營收月增率(%)",
+    "revenue_yoy_pct": "營收年增率(%)",
+    "report_date": "公告日期",
+    "fiscal_year": "年度",
+    "fiscal_quarter": "季別",
+    "cost": "營業成本(仟元)",
+    "gross_profit": "營業毛利(仟元)",
+    "gross_margin": "毛利率(%)",
+    "operating_income": "營業利益(仟元)",
+    "operating_margin": "營益率(%)",
+    "net_income": "本期淨利(仟元)",
+    "net_margin": "淨利率(%)",
+    "eps": "每股盈餘(元)",
 }
 
 

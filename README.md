@@ -6,6 +6,10 @@
 
 - 抓取大盤與個股籌碼資料,以 SQLite 累積歷史(以日期為主鍵,重複執行會 upsert,不會重複灌資料)
 - 自營商(自行買賣)連續買/賣超天數判斷,連續 5 日以上同向視為強烈訊號
+- 月營收動能:YoY/MoM 增減幅(TWSE 直接提供)+ 連續正/負成長月數(自行累積歷史算出)
+- 毛利率/營益率/淨利率:自財報(綜合損益表)原始金額自行計算,涵蓋一般業公司
+- PE 河流圖(自建版):每天累積個股 PE,算出目前 PE 落在自己歷史分布的第幾百分位、歷史極值——不是官方河流圖,樣本量取決於累積了多久(可用 `scripts/backfill_pe_history.py` 一次回補歷史)
+- 產業平均 PE(僅觀察名單內):同產業的觀察名單股票互相取 PE 平均,不是全市場產業平均
 - 匯出 Excel 報表(`data/chip_report_YYYYMMDD.xlsx`),每張資料表一個分頁,依日期新到舊排序
 - 匯出正規化 JSON(`data/weekly_scan_YYYYMMDD.json`),只放實際抓到的資料,抓不到的欄位列在 `data_quality.unavailable`,不會用假數字填充
 - 執行完畢後自動寄出報表(Excel + JSON 附件),未設定寄信帳密則自動略過;寄信本身失敗(例如帳密錯誤、網路問題)也只會印警告,不會讓整支程式以錯誤結束——資料在寄信之前就已經寫入硬碟,寄信只是錦上添花
@@ -39,7 +43,19 @@
 
 `core/analysis.py` 的 `dealer_streak` 抓出大盤自營商(自行買賣)最近 N 日的買賣方向,`main.py` 與 `export_json.py` 各自判斷是否連續 5 日以上同向——這是目前唯一內建的訊號規則,選擇自營商自行買賣是因為它反映了自營商真正的方向性部位(相對於避險部位)。
 
-### 6. 執行流程
+### 6. 低頻資料(月營收/財報)不天天真的打 API
+
+`monthly_revenue.py`(月營收)與 `financial_income.py`(財報毛利率)背後的 TWSE OpenAPI 端點沒有回溯查詢,永遠只回傳「目前最新一期」,而且月營收/財報依法只在特定期間公告。這支程式雖然設計成每天跑一次,但這兩個 provider 的 `fetch()` 會先檢查日期:月營收只在每月 1~15 日(公告截止日+緩衝)才真的呼叫 API,財報只在 3、4、5、8、11 月(年報/Q1/Q2/Q3 公告月份)才呼叫,其餘時間直接回空清單,不做沒有意義的重複請求。財報目前只涵蓋一般業公司(觀察名單標的皆屬此類),金融、證券、保險業的損益表格式不同,暫不支援。
+
+### 7. PE 河流圖是自建的,不是抓來的
+
+TWSE 沒有歷史 PE 河流圖或百分位 API,`core/analysis.py` 的 `pe_river()` 純粹用這支程式自己每天累積在 `stock_quote` 表裡的 PE 資料算出目前 PE 的歷史百分位與極值。這代表功能剛裝好時樣本量幾乎是 0,要嘛讓程式每天正常執行慢慢累積,要嘛跑一次 `scripts/backfill_pe_history.py` 一次性回補過去幾年的每日 PE。JSON 裡的 `pe_river.note` 會依樣本天數附上警語(少於 60 天時明講百分位不具參考意義),避免把統計雜訊當成訊號。
+
+### 8. 產業平均 PE 只在觀察名單內比較
+
+「產業別」來自 `monthly_revenue` 表(TWSE 月營收 API 本身就附產業分類),`industry_avg_pe()` 只把觀察名單裡同產業的股票互相取 PE 平均——刻意不去抓全市場約 1700 檔股票的 PE 做真正的產業平均,因為那需要額外的全市場資料源與產業對照表,資料量會暴增。JSON 裡的 `industry_avg_pe.scope` 明確標示 `"watchlist_only"`,不會假裝這是全市場數字。
+
+### 9. 執行流程
 
 ```text
 main.py run()
@@ -49,6 +65,8 @@ main.py run()
   │    ├─ upsert()        寫入 SQLite(冪等)
   │    └─ sleep(SLEEP_SEC) 禮貌性間隔,避免打爆對方 API
   ├─ dealer_streak()      判斷自營商連續方向,印出主控台提示
+  ├─ revenue_streak()     判斷個股月營收 YoY 連續成長/衰退 ≥3 個月,印出主控台提示
+  ├─ pe_river()           判斷個股 PE 落在自建歷史的極端百分位(≤10 或 ≥90),印出主控台提示
   ├─ export_excel()       整庫匯出成 Excel,一表一分頁
   ├─ export_weekly_scan() 整庫組成正規化 JSON
   └─ send_report()        寄出 Excel + JSON(未設定信箱則略過;寄信失敗只印警告,不中斷 run)
@@ -109,13 +127,26 @@ python main.py 20260713   # 抓指定日期(格式 YYYYMMDD)
 
 ### 執行時會發生什麼
 
-1. 掃描 `providers/` 下所有資料源,逐一抓取當日資料並 upsert 進 `data/chip.db`,主控台會印出每個 provider 的抓取結果
+1. 掃描 `providers/` 下所有資料源,逐一抓取當日資料並 upsert 進 `data/chip.db`,主控台會印出每個 provider 的抓取結果(月營收/財報只在特定期間才真的呼叫 API,見上方「原理」第 6 點)
 2. 印出自營商近 6 日買賣方向,連續同向達 5 日以上會提示強烈訊號
-3. 匯出 `data/chip_report_YYYYMMDD.xlsx`
-4. 匯出 `data/weekly_scan_YYYYMMDD.json`
-5. 寄出報表(Excel + JSON 附件)至 `.env` 裡設定的 `EMAIL_TO`(需先完成上方「設定寄信功能」步驟)
+3. 印出觀察名單個股月營收 YoY 連續成長/衰退達 3 個月以上的提示
+4. 印出觀察名單個股 PE 落在自建歷史極端百分位(≤10 或 ≥90,且樣本 ≥60 天)的提示
+5. 匯出 `data/chip_report_YYYYMMDD.xlsx`
+6. 匯出 `data/weekly_scan_YYYYMMDD.json`
+7. 寄出報表(Excel + JSON 附件)至 `.env` 裡設定的 `EMAIL_TO`(需先完成上方「設定寄信功能」步驟)
 
 `data/` 底下的輸出檔案(資料庫、Excel、JSON)不會進 git(已列入 `.gitignore`),每台機器/每次 clone 都是從零開始累積歷史。
+
+### PE 河流圖歷史回補(選用,建議跑一次)
+
+`pe_river` 統計(見上方「原理」第 7 點)靠每天累積的 PE 資料才有意義,剛裝好時樣本幾乎是 0。可以跑一次性回補腳本,把過去幾年的每日 PE 補進資料庫:
+
+```bash
+python scripts/backfill_pe_history.py            # 回補近 3 年(預設)
+python scripts/backfill_pe_history.py --years 5  # 回補近 5 年
+```
+
+這支腳本會逐一交易日呼叫 TWSE 每日收盤價 API(平日才嘗試,週末自動跳過),依 `config.SLEEP_SEC` 節流,回補 3 年約需數百次請求、數十分鐘。只需跑一次,之後 `main.py` 每天正常執行就會持續累積,不用重跑(除非要拉長回補範圍)。
 
 ### 每日自動排程(選用)
 
@@ -158,6 +189,18 @@ for row in conn.execute('SELECT * FROM stock_chip ORDER BY trade_date DESC LIMIT
 | `margin_balance.py` | `margin_balance` | 觀察名單個股融資融券餘額 | TWSE MI_MARGN |
 | `stock_quote.py` | `stock_quote` | 觀察名單個股收盤價/本益比/股價淨值比 | TWSE BWIBBU_d |
 | `foreign_futures_oi.py` | `foreign_futures_oi` | 三大法人(外資及陸資/投信/自營商)期貨未平倉,可比對土洋對作(僅回傳最新交易日) | TAIFEX OpenAPI |
+| `monthly_revenue.py` | `monthly_revenue` | 觀察名單個股月營收、YoY/MoM 增減幅、產業別(只在每月 1~15 日抓) | TWSE OpenAPI t187ap05_L |
+| `financial_income.py` | `financial_income` | 觀察名單個股(一般業)毛利率/營益率/淨利率/EPS(只在 3、4、5、8、11 月抓) | TWSE OpenAPI t187ap06_L_ci |
+
+### 自行衍生的指標(非官方 API 直接提供)
+
+這些指標 TWSE 沒有現成端點,由 `core/analysis.py` 用上述資料表自行計算,只在有足夠樣本時才輸出,不足時明確列在 JSON 的 `data_quality.unavailable`:
+
+| 指標 | 計算方式 | 限制 |
+| --- | --- | --- |
+| 營收 YoY 連續成長/衰退月數 | 累積 `monthly_revenue` 歷史,逐月比對 YoY 正負號 | 需要跑過夠多個月才有意義 |
+| PE 河流圖(百分位/極值) | 累積 `stock_quote.pe` 歷史,算目前 PE 在自己歷史分布的排名 | 自建,非官方河流圖;可用 `scripts/backfill_pe_history.py` 回補加速 |
+| 產業平均 PE | 依 `monthly_revenue.industry` 分組,組內觀察名單股票 PE 取平均 | 僅觀察名單內比較,非全市場產業平均 |
 
 ## 設定
 
@@ -178,12 +221,14 @@ core/
   base.py             DataProvider 抽象基底類別
   registry.py         自動掃描 providers/ 底下的模組並實例化
   storage.py          SQLite 存取(建表、upsert、schema 變更時自動搬遷舊資料)
-  analysis.py         籌碼分析(如自營商連續方向)
+  analysis.py         籌碼分析(自營商連續方向、營收動能連續月數、PE河流圖百分位、產業平均PE)
   report.py           匯出 Excel
   export_json.py      組出給 AI 判讀用的正規化 JSON
   mailer.py           寄送報表(Gmail SMTP,讀取 .env 帳密)
 providers/            各資料源實作,每個檔案對應一個 DataProvider 子類別
   _mi_margn.py        內部共用模組(非 DataProvider):margin_balance/market_margin 共用的 MI_MARGN 請求快取
+scripts/
+  backfill_pe_history.py  一次性回補觀察名單個股歷史 PE,加速 PE 河流圖累積樣本
 ```
 
 ## 新增資料源

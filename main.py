@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import config
-from core.analysis import dealer_streak
+from core.analysis import dealer_streak, pe_river, revenue_streak
 from core.export_json import export_weekly_scan
 from core.mailer import send_report
 from core.registry import load_providers
@@ -42,6 +42,26 @@ def run(date_str=None):
         print(f"\n🆕 自營商(自行買賣)近{len(signs)}日:{' '.join(signs)}")
         if len(set(signs)) == 1 and len(signs) >= 5:
             print(f"⚠️ 連{len(signs)}日同向{signs[0]}超 = 強烈訊號")
+
+    for sid, name in config.WATCHLIST.items():
+        rev_rows = revenue_streak(store.conn, sid, 6)
+        if rev_rows:
+            signs = ["正" if v > 0 else "負" for _, v in rev_rows]
+            months = 1
+            for s in signs[1:]:
+                if s != signs[0]:
+                    break
+                months += 1
+            if months >= 3:
+                print(f"📈 {name}({sid}) 月營收YoY連續{months}個月{signs[0]}成長")
+
+        river = pe_river(store.conn, sid)
+        if river and river["sample_days"] >= 60:
+            pct = river["percentile"]
+            if pct <= 10 or pct >= 90:
+                zone = "低檔" if pct <= 10 else "高檔"
+                print(f"📊 {name}({sid}) PE {river['current_pe']} 落在自建歷史第{pct}百分位"
+                      f"({zone},樣本{river['sample_days']}天)")
 
     store.close()
 
