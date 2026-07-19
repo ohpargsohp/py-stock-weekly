@@ -15,6 +15,8 @@ SHEET_NAMES = {
     "monthly_revenue": "月營收動能",
     "financial_income": "財報毛利率",
     "stock_price_action": "個股價格結構",
+    "balance_sheet": "財報資產負債表",
+    "sbl_balance": "個股借券賣出餘額",
 }
 
 COLUMN_NAMES = {
@@ -71,6 +73,17 @@ COLUMN_NAMES = {
     "low": "最低價",
     "volume_lots": "成交量(張)",
     "turnover_yi": "成交金額(億元)",
+    "current_assets": "流動資產(仟元)",
+    "total_assets": "資產總額(仟元)",
+    "current_liabilities": "流動負債(仟元)",
+    "total_liabilities": "負債總額(仟元)",
+    "total_equity": "權益總額(仟元)",
+    "debt_ratio": "負債比率(%)",
+    "book_value_per_share": "每股參考淨值(元)",
+    "sbl_balance": "借券賣出餘額(股)",
+    "sbl_balance_chg": "借券賣出餘額增減(股)",
+    "sbl_sell": "當日借券賣出(股)",
+    "sbl_return": "當日還券(股)",
 }
 
 

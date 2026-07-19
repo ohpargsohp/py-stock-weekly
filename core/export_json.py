@@ -171,6 +171,15 @@ def build_weekly_scan(db_path):
                     "SELECT * FROM margin_balance WHERE trade_date = ?", (stock_latest,)
                 ).fetchall()
             }
+        sbl_by_id = {}
+        if _table_exists(conn, "sbl_balance"):
+            sbl_latest = conn.execute("SELECT MAX(trade_date) FROM sbl_balance").fetchone()[0]
+            if sbl_latest:
+                sbl_by_id = {
+                    r["stock_id"]: r for r in conn.execute(
+                        "SELECT * FROM sbl_balance WHERE trade_date = ?", (sbl_latest,)
+                    ).fetchall()
+                }
         quote_by_id = {}
         if _table_exists(conn, "stock_quote"):
             quote_latest = conn.execute("SELECT MAX(trade_date) FROM stock_quote").fetchone()[0]
@@ -198,6 +207,14 @@ def build_weekly_scan(db_path):
                     WHERE period = (SELECT MAX(period) FROM financial_income WHERE stock_id = fi.stock_id)
                 """).fetchall()
             }
+        balance_sheet_by_id = {}
+        if _table_exists(conn, "balance_sheet"):
+            balance_sheet_by_id = {
+                r["stock_id"]: r for r in conn.execute("""
+                    SELECT * FROM balance_sheet bs
+                    WHERE period = (SELECT MAX(period) FROM balance_sheet WHERE stock_id = bs.stock_id)
+                """).fetchall()
+            }
         price_action_by_id = {}
         if _table_exists(conn, "stock_price_action"):
             price_latest = conn.execute("SELECT MAX(trade_date) FROM stock_price_action").fetchone()[0]
@@ -208,6 +225,7 @@ def build_weekly_scan(db_path):
                     ).fetchall()
                 }
         has_revenue_momentum = has_gross_margin = has_pe_river = has_price_action = False
+        has_balance_sheet = has_sbl_balance = False
         watchlist = []
         for r in stock_rows:
             entry = {
@@ -230,6 +248,18 @@ def build_weekly_scan(db_path):
                     "short_balance": m["short_balance"],
                     "short_balance_chg": m["short_balance_chg"],
                 })
+            sbl = sbl_by_id.get(r["stock_id"])
+            if sbl:
+                entry["sbl_balance"] = {
+                    "trade_date": _iso(sbl["trade_date"]),
+                    "source": "TWSE-TWT93U",
+                    "unit": "股",
+                    "sbl_balance": sbl["sbl_balance"],
+                    "sbl_balance_chg": sbl["sbl_balance_chg"],
+                    "sbl_sell": sbl["sbl_sell"],
+                    "sbl_return": sbl["sbl_return"],
+                }
+                has_sbl_balance = True
             q = quote_by_id.get(r["stock_id"])
             if q:
                 # ETF(如 0050)沒有本益比/淨值比,close 仍可能有值、pe/pb 會是 None
@@ -295,6 +325,20 @@ def build_weekly_scan(db_path):
                 }
                 has_gross_margin = True
 
+            bs = balance_sheet_by_id.get(r["stock_id"])
+            if bs:
+                entry["balance_sheet"] = {
+                    "period": bs["period"],
+                    "source": "TWSE-t187ap07_L_ci",
+                    "unit": "仟元",
+                    "total_assets": bs["total_assets"],
+                    "total_liabilities": bs["total_liabilities"],
+                    "total_equity": bs["total_equity"],
+                    "debt_ratio_pct": bs["debt_ratio"],
+                    "book_value_per_share": bs["book_value_per_share"],
+                }
+                has_balance_sheet = True
+
             river = pe_river(conn, r["stock_id"])
             if river:
                 river = dict(river)
@@ -316,6 +360,10 @@ def build_weekly_scan(db_path):
                 verified.append("watchlist[].pe_river")
             if has_price_action:
                 verified.append("watchlist[].price_action")
+            if has_balance_sheet:
+                verified.append("watchlist[].balance_sheet")
+            if has_sbl_balance:
+                verified.append("watchlist[].sbl_balance")
 
     result["data_quality"] = {"verified": verified, "unavailable": unavailable}
 
