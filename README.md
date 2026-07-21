@@ -18,6 +18,7 @@
 ### 籌碼面(逐日)
 
 - 抓取大盤與個股籌碼資料,以 SQLite 累積歷史(以日期為主鍵,重複執行會 upsert,不會重複灌資料)
+- 交易日曆:依 TWSE 官方休市公告判斷當天是否為交易日,把「當天沒有資料」明確拆成「休市」跟「無法判斷」,不再是含糊不清的單一說明
 - 自營商(自行買賣)連續買/賣超天數判斷,連續 5 日以上同向視為強烈訊號
 - 借券賣出餘額:觀察名單個股借券賣出餘額與當日賣出/還券增減,可作為法人/大戶放空壓力的參考訊號
 - 個股價格結構:開高低收、單日漲跌幅、成交量/成交金額,支援乖離率、量價結構等技術面判讀
@@ -66,7 +67,7 @@
 
 ### 3. 資料品質:寧缺勿濫
 
-`core/export_json.py` 組出的 JSON 只放「實際查得到」的欄位。查不到的項目(例如大盤股價淨值比沒有官方 API、休市與抓取失敗目前無法區分)會明確列在 `data_quality.unavailable` 並附上原因,而不是用 0 或估計值填充。這是為了給 AI 或人判讀時能明確分辨「沒有這個資訊」跟「這個資訊是 0」,避免誤判。
+`core/export_json.py` 組出的 JSON 只放「實際查得到」的欄位。查不到的項目(例如大盤股價淨值比沒有官方 API)會明確列在 `data_quality.unavailable` 並附上原因,而不是用 0 或估計值填充。這是為了給 AI 或人判讀時能明確分辨「沒有這個資訊」跟「這個資訊是 0」,避免誤判。
 
 ### 4. 落後資料:各自回報自己的日期,不硬湊 anchor
 
@@ -101,10 +102,21 @@ TWSE 沒有歷史 PE 河流圖或百分位 API,`core/analysis.py` 的 `pe_river(
 - **`ir_conference.py`(法說會日期)**:官方網域 `mops.twse.com.tw` 對雲端/機房 IP 常直接觸發 WAF 擋下(已實測驗證,回應「因為安全性考量」錯誤頁,無論帶什麼 Header 都一樣),改走鏡像網域 `mopsov.twse.com.tw` 可正常查詢到一致的資料。這支查詢是「依公司代號 + 民國年」查歷年法說會列表,不是「當天」資料;只查當年度,跨年度已公告的場次要等年度切換後才查得到;目前只用 `TYPEK=sii`(上市)查詢,觀察名單若有上櫃個股不會查到資料,ETF(如 0050)本身不開法說會、查無資料是正常現象不是抓取失敗。
 - **`market_vix.py`(VIX 恐慌指數)**:資料來自 FRED(聖路易 Fed)的 `VIXCLS` 序列,需自行到 [fredaccount.stlouisfed.org/apikeys](https://fredaccount.stlouisfed.org/apikeys) 免費申請 `FRED_API_KEY` 並寫入 `.env`,未設定則印警告並略過,不中斷主流程(做法比照寄信設定)。這是目前唯一用到的總經指標,主要用來支援「VIX>35 極端恐慌」這類條件單訊號。
 
-### 10. 執行流程
+### 10. 交易日曆:把「休市」跟「抓取失敗」分開
+
+早期版本沒有交易日曆,`market_closed` 只能含糊地列在 `data_quality.unavailable` 說明「當天沒資料可能是休市也可能是抓取失敗,無法區分」。現在 `core/calendar.py` 的 `is_trading_day(date_str)` 會先查 TWSE 官方休市日期公告(`/v1/holidaySchedule/holidaySchedule`),回傳三態:
+
+- 週六、週日不用查 API 就直接判定為休市。
+- 平日則對照 TWSE 公告的休市日清單(國定假日、補假、僅辦理結算交割等)。這份清單裡有兩種容易混淆的項目:「農曆春節前最後交易日」「XX 後開始交易日」只是提醒性質的標記,當天市場正常交易,不是休市日——判斷時會用 `Name` 是否含「交易日」三字排除掉這兩種,避免誤判。
+- 若日曆抓取失敗,或請求的日期超出「TWSE 目前已公告」的年度範圍(這支 API 沒有年度參數,通常只回傳當年度,約當年 Q4 起才會加上次年度),則回傳 `None` 代表「現在無法判斷」,呼叫端(`export_json.py`)會照實列在 `data_quality.unavailable`,不會亂猜。
+
+`main.py` 執行時會先印出當天是否為休市日;`export_json.py` 則會在 JSON 頂層明確寫出 `market_closed: true/false`(可判斷時)。之所以選 TWSE 官方公告而不是第三方交易日曆套件(例如 `pandas_market_calendars`),是因為前者是這支程式其他 provider 本來就在用的同一個官方 API 家族,不用多引入 `pandas` 這類重量級相依套件,而且官方公告本身就是最新、最權威的來源;唯一的共同限制是兩種做法都無法預先得知「颱風假」這類臨時性休市——這類公告通常在前一天或當天才發布,任何靜態日曆都不會提前收錄。
+
+### 11. 執行流程
 
 ```text
 main.py run()
+  ├─ is_trading_day(date_str)  印出當天是否為休市日(交易日曆,見上方原理第 10 點)
   ├─ 逐一走訪 load_providers() 回傳的每個 provider
   │    ├─ ensure_table()  若表不存在則建立
   │    ├─ fetch(date_str) 呼叫外部 API 拿當日資料
@@ -180,15 +192,16 @@ python main.py 20260713   # 抓指定日期(格式 YYYYMMDD)
 
 ### 執行時會發生什麼
 
-1. 掃描 `providers/` 下所有資料源,逐一抓取當日資料並 upsert 進 `data/chip.db`,主控台會印出每個 provider 的抓取結果(月營收/財報每次都會呼叫 API,但常拿到與前次相同的最新一期資料,見上方「原理」第 6 點;集保股權分散表每週才會有新資料,見「原理」第 9 點)
-2. 印出自營商近 6 日買賣方向,連續同向達 5 日以上會提示強烈訊號
-3. 若 VIX > 35 印出極端恐慌提示(需先設定 `FRED_API_KEY`)
-4. 印出觀察名單個股月營收 YoY 連續成長/衰退達 3 個月以上的提示
-5. 印出觀察名單個股 PE 落在自建歷史極端百分位(≤10 或 ≥90,且樣本 ≥60 天)的提示
-6. 印出觀察名單個股千張大戶佔比連續增/減達 3 週以上的提示
-7. 匯出 `data/chip_report_YYYYMMDD.xlsx`
-8. 匯出 `data/weekly_scan_YYYYMMDD.json`
-9. 寄出報表(Excel + JSON 附件)至 `.env` 裡設定的 `EMAIL_TO`(需先完成上方「設定寄信功能」步驟)
+1. 依 TWSE 官方休市公告判斷今天是否為交易日,印出提示(見上方「原理」第 10 點)
+2. 掃描 `providers/` 下所有資料源,逐一抓取當日資料並 upsert 進 `data/chip.db`,主控台會印出每個 provider 的抓取結果(月營收/財報每次都會呼叫 API,但常拿到與前次相同的最新一期資料,見上方「原理」第 6 點;集保股權分散表每週才會有新資料,見「原理」第 9 點)
+3. 印出自營商近 6 日買賣方向,連續同向達 5 日以上會提示強烈訊號
+4. 若 VIX > 35 印出極端恐慌提示(需先設定 `FRED_API_KEY`)
+5. 印出觀察名單個股月營收 YoY 連續成長/衰退達 3 個月以上的提示
+6. 印出觀察名單個股 PE 落在自建歷史極端百分位(≤10 或 ≥90,且樣本 ≥60 天)的提示
+7. 印出觀察名單個股千張大戶佔比連續增/減達 3 週以上的提示
+8. 匯出 `data/chip_report_YYYYMMDD.xlsx`
+9. 匯出 `data/weekly_scan_YYYYMMDD.json`
+10. 寄出報表(Excel + JSON 附件)至 `.env` 裡設定的 `EMAIL_TO`(需先完成上方「設定寄信功能」步驟)
 
 `data/` 底下的輸出檔案(資料庫、Excel、JSON)不會進 git(已列入 `.gitignore`),每台機器/每次 clone 都是從零開始累積歷史。
 
@@ -283,6 +296,7 @@ core/
   registry.py         自動掃描 providers/ 底下的模組並實例化
   storage.py          SQLite 存取(建表、upsert、schema 變更時自動搬遷舊資料)
   analysis.py         籌碼分析(自營商連續方向、營收動能連續月數、PE河流圖百分位、千張大戶佔比連續週數)
+  calendar.py         交易日曆(is_trading_day):依 TWSE 官方休市公告判斷是否為交易日
   report.py           匯出 Excel
   export_json.py      組出給 AI 判讀用的正規化 JSON
   mailer.py           寄送報表(Gmail SMTP,讀取 .env 帳密)

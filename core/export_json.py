@@ -3,6 +3,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from core.analysis import dealer_streak, holder_pct_streak, pe_river, revenue_streak
+from core.calendar import is_trading_day
 
 TW_TZ = timezone(timedelta(hours=8))
 
@@ -18,10 +19,14 @@ def _table_exists(conn, name):
     ).fetchone() is not None
 
 
-def build_weekly_scan(db_path):
+def build_weekly_scan(db_path, date_str=None):
     """把 SQLite 裡的資料組成給 AI 判讀用的正規化 JSON。
     只放實際有抓到的資料;抓不到的欄位(大盤指數、個股股價/PE、市場層級融資
-    彙總、明確的休市標記)一律列在 data_quality.unavailable,不用假數字填充。
+    彙總)一律列在 data_quality.unavailable,不用假數字填充。
+
+    date_str 是這次 main.py 執行時實際要抓的日期(YYYYMMDD),用來判斷
+    market_closed(見 core/calendar.py);未傳入時(例如直接呼叫這支函式測試)
+    退回用 datetime.now() 當作判斷基準。
     """
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -30,7 +35,6 @@ def build_weekly_scan(db_path):
     unavailable = [
         "market_pb(大盤股價淨值比)——TWSE 沒有官方每日 API,要算需自行對全市場個股做市值加權,"
         "目前沒有流通股數/市值資料源可用,故不提供(不做未加權簡易平均,避免誤導)",
-        "market_closed 明確標記——目前『當天沒有資料』可能是休市,也可能是抓取失敗,兩者尚未區分",
         "industry_avg_pe(同業估值比較)——觀察名單每個產業通常只有 2~3 檔標的,"
         "屬極小樣本,對照組不具統計意義,直接拿來判斷個股「相對同業低估/高估」會誤導;"
         "需要全市場同產業成分股 + 市值加權才有參考價值,目前沒有全市場 PE + 產業對照表資料源,故不提供",
@@ -44,6 +48,18 @@ def build_weekly_scan(db_path):
         "as_of": _iso(anchor),
         "generated_at": datetime.now(TW_TZ).isoformat(),
     }
+
+    # 休市判斷:依 TWSE 官方休市日曆,把「當天沒有資料」明確拆成「休市」跟
+    # 「日曆本身無法判斷」兩種情況,不再是含糊的單一 unavailable 說明(見 core/calendar.py)。
+    trading_day = is_trading_day(date_str or datetime.now(TW_TZ).strftime("%Y%m%d"))
+    if trading_day is None:
+        unavailable.append(
+            "market_closed 明確標記——TWSE 官方休市日曆本次無法取得,或不涵蓋這個年度"
+            "(該 API 只回傳目前已公告的年度),暫時無法判斷『當天沒有資料』是休市還是抓取失敗"
+        )
+    else:
+        result["market_closed"] = not trading_day
+        verified.append("market_closed")
 
     # 大盤指數(收盤/漲跌/成交量)
     if _table_exists(conn, "market_index"):
@@ -436,8 +452,8 @@ def build_weekly_scan(db_path):
     return result
 
 
-def export_weekly_scan(db_path, out_path):
-    data = build_weekly_scan(db_path)
+def export_weekly_scan(db_path, out_path, date_str=None):
+    data = build_weekly_scan(db_path, date_str)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     return out_path

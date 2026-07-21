@@ -12,6 +12,7 @@ load_dotenv()
 
 import config
 from core.analysis import dealer_streak, holder_pct_streak, pe_river, revenue_streak
+from core.calendar import is_trading_day
 from core.export_json import export_weekly_scan
 from core.mailer import send_report
 from core.registry import load_providers
@@ -26,6 +27,13 @@ def _with_date(path, date_str):
 
 def run(date_str=None):
     date_str = date_str or datetime.now().strftime("%Y%m%d")
+
+    trading_day = is_trading_day(date_str)
+    if trading_day is False:
+        print(f"📅 {date_str} 為 TWSE 官方公告休市日(週末或國定假日),當天各資料源預期不會有新資料")
+    elif trading_day is None:
+        print(f"📅 {date_str} 是否為交易日目前無法判斷(交易日曆抓取失敗或不涵蓋此年度)")
+
     store = Storage(config.DB_PATH)
 
     for p in load_providers():
@@ -87,7 +95,7 @@ def run(date_str=None):
     print(f"📊 報表已輸出: {excel_path}")
 
     json_path = _with_date(config.JSON_PATH, date_str)
-    export_weekly_scan(config.DB_PATH, json_path)
+    export_weekly_scan(config.DB_PATH, json_path, date_str)
     print(f"🧾 判讀用 JSON 已輸出: {json_path}")
 
     try:
