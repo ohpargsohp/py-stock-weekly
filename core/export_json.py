@@ -2,7 +2,7 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from core.analysis import dealer_streak, pe_river, revenue_streak
+from core.analysis import dealer_streak, holder_pct_streak, pe_river, revenue_streak
 
 TW_TZ = timezone(timedelta(hours=8))
 
@@ -61,6 +61,20 @@ def build_weekly_scan(db_path):
                 "unit_volume": "億元",
             }
             verified.append("market_index")
+
+    # VIX 恐慌指數(FRED VIXCLS)——總經條件單訊號,如 VIX>35 極端恐慌
+    if _table_exists(conn, "market_vix"):
+        r = conn.execute(
+            "SELECT * FROM market_vix ORDER BY trade_date DESC LIMIT 1"
+        ).fetchone()
+        if r:
+            result["market_vix"] = {
+                "trade_date": _iso(r["trade_date"]),
+                "source": "FRED-VIXCLS",
+                "vix": r["vix"],
+                "signal": "extreme_fear(VIX>35)" if r["vix"] > 35 else None,
+            }
+            verified.append("market_vix")
 
     # 全市場融資融券餘額(散戶槓桿總量)
     if _table_exists(conn, "market_margin"):
@@ -154,6 +168,24 @@ def build_weekly_scan(db_path):
             }
             verified.append("foreign_futures_oi")
 
+    # 觀察名單個股法說會(MOPS t100sb02_1),只列今天以後的場次
+    if _table_exists(conn, "ir_conference"):
+        today_str = datetime.now(TW_TZ).strftime("%Y%m%d")
+        rows = conn.execute("""
+            SELECT * FROM ir_conference WHERE conf_date >= ? ORDER BY conf_date
+        """, (today_str,)).fetchall()
+        if rows:
+            result["ir_conferences_upcoming"] = [{
+                "stock_id": r["stock_id"],
+                "stock_name": r["stock_name"],
+                "source": "MOPS-t100sb02_1",
+                "conf_date": _iso(r["conf_date"]),
+                "conf_time": r["conf_time"],
+                "location": r["location"],
+                "summary": r["summary"],
+            } for r in rows]
+            verified.append("ir_conferences_upcoming")
+
     # watchlist:個股三大法人 + 融資融券 + 收盤價
     # 以 stock_chip 自己最新的一天為準,不要求和大盤 anchor 同一天——
     # 跟 foreign_futures_oi 一樣,TWSE 個股三大法人/收盤價 API 常常比大盤指數
@@ -215,6 +247,15 @@ def build_weekly_scan(db_path):
                     WHERE period = (SELECT MAX(period) FROM balance_sheet WHERE stock_id = bs.stock_id)
                 """).fetchall()
             }
+        holder_by_id = {}
+        if _table_exists(conn, "holder_distribution"):
+            holder_latest = conn.execute("SELECT MAX(trade_date) FROM holder_distribution").fetchone()[0]
+            if holder_latest:
+                holder_by_id = {
+                    r["stock_id"]: r for r in conn.execute(
+                        "SELECT * FROM holder_distribution WHERE trade_date = ?", (holder_latest,)
+                    ).fetchall()
+                }
         price_action_by_id = {}
         if _table_exists(conn, "stock_price_action"):
             price_latest = conn.execute("SELECT MAX(trade_date) FROM stock_price_action").fetchone()[0]
@@ -225,7 +266,7 @@ def build_weekly_scan(db_path):
                     ).fetchall()
                 }
         has_revenue_momentum = has_gross_margin = has_pe_river = has_price_action = False
-        has_balance_sheet = has_sbl_balance = False
+        has_balance_sheet = has_sbl_balance = has_holder_distribution = False
         watchlist = []
         for r in stock_rows:
             entry = {
@@ -260,6 +301,28 @@ def build_weekly_scan(db_path):
                     "sbl_return": sbl["sbl_return"],
                 }
                 has_sbl_balance = True
+            hd = holder_by_id.get(r["stock_id"])
+            if hd:
+                holder_entry = {
+                    "trade_date": _iso(hd["trade_date"]),
+                    "source": "TDCC-OpenData-1-5",
+                    "note": "TDCC 每週公布一次(以週五庫存為基準),非每日資料",
+                    "big_holder_count": hd["big_holder_count"],
+                    "big_holder_pct": hd["big_holder_pct"],
+                    "total_holders": hd["total_holders"],
+                }
+                streak_rows = holder_pct_streak(conn, r["stock_id"], 6)
+                if streak_rows:
+                    signs = ["增" if v > 0 else "減" for _, v in streak_rows]
+                    streak_weeks = 1
+                    for s in signs[1:]:
+                        if s != signs[0]:
+                            break
+                        streak_weeks += 1
+                    holder_entry["streak_weeks"] = streak_weeks
+                    holder_entry["streak_direction"] = signs[0]
+                entry["holder_distribution"] = holder_entry
+                has_holder_distribution = True
             q = quote_by_id.get(r["stock_id"])
             if q:
                 # ETF(如 0050)沒有本益比/淨值比,close 仍可能有值、pe/pb 會是 None
@@ -364,6 +427,8 @@ def build_weekly_scan(db_path):
                 verified.append("watchlist[].balance_sheet")
             if has_sbl_balance:
                 verified.append("watchlist[].sbl_balance")
+            if has_holder_distribution:
+                verified.append("watchlist[].holder_distribution")
 
     result["data_quality"] = {"verified": verified, "unavailable": unavailable}
 

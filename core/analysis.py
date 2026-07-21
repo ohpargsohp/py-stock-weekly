@@ -16,6 +16,18 @@ def revenue_streak(conn, stock_id, periods=6):
     """, (stock_id, periods)).fetchall()
 
 
+def holder_pct_streak(conn, stock_id, weeks=6):
+    """個股近 N 期千張大戶(TDCC 持股分級最高級距)佔集保庫存比例的週對週增減,
+    用來判斷連續加碼/派發週數(大戶籌碼動向核心指標)。
+    holder_distribution 是每週更新一次的快照,回傳 (trade_date, 較前一期增減百分點)、
+    最新一期在前,格式比照 dealer_streak 方便呼叫端用同一套「連續同向」邏輯處理。"""
+    rows = conn.execute("""
+        SELECT trade_date, big_holder_pct FROM holder_distribution
+        WHERE stock_id = ? ORDER BY trade_date DESC LIMIT ?
+    """, (stock_id, weeks + 1)).fetchall()
+    return [(rows[i][0], round(rows[i][1] - rows[i + 1][1], 2)) for i in range(len(rows) - 1)]
+
+
 def pe_river(conn, stock_id):
     """個股歷史 PE 統計(自建版河流圖):用這支程式每天累積的 stock_quote.pe
     算出目前 PE 落在歷史分布的第幾百分位、歷史最小/最大值。

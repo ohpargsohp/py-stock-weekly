@@ -17,6 +17,9 @@ SHEET_NAMES = {
     "stock_price_action": "個股價格結構",
     "balance_sheet": "財報資產負債表",
     "sbl_balance": "個股借券賣出餘額",
+    "market_vix": "VIX恐慌指數",
+    "holder_distribution": "集保股權分散(千張大戶)",
+    "ir_conference": "法人說明會",
 }
 
 COLUMN_NAMES = {
@@ -84,6 +87,15 @@ COLUMN_NAMES = {
     "sbl_balance_chg": "借券賣出餘額增減(股)",
     "sbl_sell": "當日借券賣出(股)",
     "sbl_return": "當日還券(股)",
+    "vix": "VIX指數",
+    "big_holder_count": "千張大戶人數",
+    "big_holder_shares": "千張大戶股數",
+    "big_holder_pct": "千張大戶佔比(%)",
+    "total_holders": "全體集保人數",
+    "conf_date": "法說會日期",
+    "conf_time": "法說會時間",
+    "location": "地點",
+    "summary": "擇要訊息",
 }
 
 
@@ -98,7 +110,8 @@ def export_excel(db_path, out_path):
 
     for t in tables:
         cols = [r[1] for r in conn.execute(f"PRAGMA table_info({t})")]
-        order_col = "trade_date" if "trade_date" in cols else cols[0]
+        order_col = "trade_date" if "trade_date" in cols else (
+            "conf_date" if "conf_date" in cols else cols[0])
         rows = conn.execute(f"SELECT * FROM {t} ORDER BY {order_col} DESC").fetchall()
 
         ws = wb.create_sheet(title=SHEET_NAMES.get(t, t)[:31])

@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import config
-from core.analysis import dealer_streak, pe_river, revenue_streak
+from core.analysis import dealer_streak, holder_pct_streak, pe_river, revenue_streak
 from core.export_json import export_weekly_scan
 from core.mailer import send_report
 from core.registry import load_providers
@@ -43,6 +43,12 @@ def run(date_str=None):
         if len(set(signs)) == 1 and len(signs) >= 5:
             print(f"⚠️ 連{len(signs)}日同向{signs[0]}超 = 強烈訊號")
 
+    vix_row = store.conn.execute(
+        "SELECT trade_date, vix FROM market_vix ORDER BY trade_date DESC LIMIT 1"
+    ).fetchone()
+    if vix_row and vix_row[1] > 35:
+        print(f"🚨 VIX {vix_row[1]:.2f} > 35,市場極度恐慌")
+
     for sid, name in config.WATCHLIST.items():
         rev_rows = revenue_streak(store.conn, sid, 6)
         if rev_rows:
@@ -62,6 +68,17 @@ def run(date_str=None):
                 zone = "低檔" if pct <= 10 else "高檔"
                 print(f"📊 {name}({sid}) PE {river['current_pe']} 落在自建歷史第{pct}百分位"
                       f"({zone},樣本{river['sample_days']}天)")
+
+        holder_streak = holder_pct_streak(store.conn, sid, 6)
+        if holder_streak:
+            signs = ["增" if v > 0 else "減" for _, v in holder_streak]
+            weeks = 1
+            for s in signs[1:]:
+                if s != signs[0]:
+                    break
+                weeks += 1
+            if weeks >= 3:
+                print(f"👥 {name}({sid}) 千張大戶佔比連續{weeks}週{signs[0]}")
 
     store.close()
 
