@@ -30,7 +30,7 @@ def run(date_str=None):
 
     trading_day = is_trading_day(date_str)
     if trading_day is False:
-        print(f"📅 {date_str} 為 TWSE 官方公告休市日(週末或國定假日),當天各資料源預期不會有新資料")
+        print(f"📅 {date_str} 為休市日(週末/國定假日/臺北市天然災害停止上班),當天各資料源預期不會有新資料")
     elif trading_day is None:
         print(f"📅 {date_str} 是否為交易日目前無法判斷(交易日曆抓取失敗或不涵蓋此年度)")
 
