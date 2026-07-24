@@ -74,6 +74,7 @@ def build_weekly_scan(db_path, date_str=None):
                 "change_pts": r["change_pts"],
                 "change_pct": r["change_pct"],
                 "volume_yi": r["volume_yi"],
+                "volume_yi_core": r["volume_yi_core"],
                 "unit_volume": "億元",
             }
             verified.append("market_index")

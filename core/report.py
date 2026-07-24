@@ -30,6 +30,7 @@ COLUMN_NAMES = {
     "change_pts": "漲跌點數",
     "change_pct": "漲跌幅(%)",
     "volume_yi": "成交量(億元)",
+    "volume_yi_core": "成交量-一般時段口徑(億元)",
     "foreign_net": "外資買賣超",
     "trust_net": "投信買賣超",
     "dealer_self_net": "自營商自行買賣超",
