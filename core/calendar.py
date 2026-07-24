@@ -1,7 +1,7 @@
 import logging
 import re
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 
@@ -134,3 +134,45 @@ def is_trading_day(date_str):
         return None
 
     return date_str not in holidays
+
+
+def trading_days_between(start_str, end_str):
+    """算 start_str(不含)到 end_str(含)之間有幾個交易日,用交易日曆而非日曆日——
+    週五的資料在週一被讀取時 lag_days 應該是 1,不是實際經過的 3 個日曆天。
+
+    is_trading_day() 回傳 None(無法判斷,如休市日曆抓取失敗或跨年度)的日子
+    保守地不計入 lag(寧可低估落後天數,也不要因為日曆本身不確定而誤判)。
+    end_str <= start_str 時視為沒有落後,回傳 0。
+    """
+    start = datetime.strptime(start_str, "%Y%m%d").date()
+    end = datetime.strptime(end_str, "%Y%m%d").date()
+    if end <= start:
+        return 0
+
+    count = 0
+    d = start + timedelta(days=1)
+    while d <= end:
+        if is_trading_day(d.strftime("%Y%m%d")):
+            count += 1
+        d += timedelta(days=1)
+    return count
+
+
+def previous_trading_day(date_str):
+    """從 date_str(YYYYMMDD)往回找最近一個交易日(不含 date_str 當天自己)。
+    用於早盤定稿排程(IMP-2):08:30 執行時,前一交易日才是「昨晚可能還沒收到
+    T+1 資料」的那個交易日,週一執行時會正確回補上週五而非週日。
+
+    最多回溯 10 天(足夠涵蓋連假);若途中遇到 is_trading_day() 回傳 None
+    (無法判斷),保守地直接回傳 None,不亂猜。
+    """
+    d = datetime.strptime(date_str, "%Y%m%d").date()
+    for _ in range(10):
+        d -= timedelta(days=1)
+        ds = d.strftime("%Y%m%d")
+        result = is_trading_day(ds)
+        if result is None:
+            return None
+        if result:
+            return ds
+    return None

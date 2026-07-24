@@ -16,6 +16,16 @@ def revenue_streak(conn, stock_id, periods=6):
     """, (stock_id, periods)).fetchall()
 
 
+def revenue_history_count(conn, stock_id):
+    """個股目前累積了幾期有 YoY 數字的月營收,用來判斷 revenue_streak() 算出來的
+    連續月數是否可信——資料庫剛起步、只累積 1~2 期時,streak 一定等於期數本身,
+    是「資料不足」而非「真的只連續 1 個月」,呼叫端應依此決定要不要輸出 streak。"""
+    return conn.execute("""
+        SELECT COUNT(*) FROM monthly_revenue
+        WHERE stock_id = ? AND revenue_yoy_pct IS NOT NULL
+    """, (stock_id,)).fetchone()[0]
+
+
 def holder_pct_streak(conn, stock_id, weeks=6):
     """個股近 N 期千張大戶(TDCC 持股分級最高級距)佔集保庫存比例的週對週增減,
     用來判斷連續加碼/派發週數(大戶籌碼動向核心指標)。

@@ -2,15 +2,38 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
-from core.analysis import dealer_streak, holder_pct_streak, pe_river, revenue_streak
-from core.calendar import is_trading_day
+from core.analysis import (
+    dealer_streak, holder_pct_streak, pe_river, revenue_history_count, revenue_streak,
+)
+from core.calendar import is_trading_day, trading_days_between
 
 TW_TZ = timezone(timedelta(hours=8))
+
+# IMP-3:少於這個月數的 YoY 歷史,streak 是「資料不足」而非「真的只連續這麼多月」,
+# 見 core/analysis.py revenue_history_count()。
+MIN_HISTORY_MONTHS = 6
+
+# IMP-5:依台灣財報法定申報截止日(Q1 5/15、H1(Q2) 8/14、Q3 11/14、年報(Q4) 次年 3/31),
+# 推算「目前 pe_river 用的 trailing EPS 分母」下一次會在哪個月被換血(見 balance_sheet.py
+# 同一套截止日邏輯)。key 是目前 gross_margin.period 的季別,value 是 (下次換血月份, 年份位移)。
+_NEXT_REBASE = {"Q1": ("08", 0), "Q2": ("11", 0), "Q3": ("03", 1), "Q4": ("05", 1)}
 
 
 def _iso(date_str):
     """'20260709' -> '2026-07-09'"""
     return f"{date_str[0:4]}-{date_str[4:6]}-{date_str[6:8]}" if date_str else None
+
+
+def _next_rebase_expected(period):
+    """'2026Q1' -> '2026-08'"""
+    if not period or len(period) < 6:
+        return None
+    year, q = int(period[:4]), period[4:]
+    month_year = _NEXT_REBASE.get(q)
+    if not month_year:
+        return None
+    month, year_offset = month_year
+    return f"{year + year_offset}-{month}"
 
 
 def _table_exists(conn, name):
@@ -19,7 +42,25 @@ def _table_exists(conn, name):
     ).fetchone() is not None
 
 
-def build_weekly_scan(db_path, date_str=None):
+def _add_stale(stale, field, data_date, as_of, reason):
+    """IMP-1:data_date/as_of 都是原始 YYYYMMDD 格式(未轉 ISO)。
+    lag_days 用交易日曆算(見 core/calendar.py trading_days_between),
+    同一個 field 只記一次——呼叫端(watchlist 內層 sbl_balance/holder_distribution)
+    本來就已经是「全觀察名單共用同一個最新日期」,不會重複記。"""
+    if not data_date or not as_of or data_date == as_of:
+        return
+    lag = trading_days_between(data_date, as_of)
+    if lag >= 1:
+        stale.append({
+            "field": field,
+            "data_date": _iso(data_date),
+            "as_of": _iso(as_of),
+            "lag_days": lag,
+            "reason": reason or "來源更新延遲",
+        })
+
+
+def build_weekly_scan(db_path, date_str=None, revision="draft"):
     """把 SQLite 裡的資料組成給 AI 判讀用的正規化 JSON。
     只放實際有抓到的資料;抓不到的欄位(大盤指數、個股股價/PE、市場層級融資
     彙總)一律列在 data_quality.unavailable,不用假數字填充。
@@ -27,11 +68,15 @@ def build_weekly_scan(db_path, date_str=None):
     date_str 是這次 main.py 執行時實際要抓的日期(YYYYMMDD),用來判斷
     market_closed(見 core/calendar.py);未傳入時(例如直接呼叫這支函式測試)
     退回用 datetime.now() 當作判斷基準。
+
+    revision 是 IMP-2 雙排程機制的標記:"draft"(晚間 20:00,期貨 OI/VIX
+    可能還是 T-1)或 "final"(次日早盤 08:30 用前一交易日重跑,補齊 T+1 資料)。
     """
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
 
     verified = []
+    stale = []
     unavailable = [
         "market_pb(大盤股價淨值比)——TWSE 沒有官方每日 API,要算需自行對全市場個股做市值加權,"
         "目前沒有流通股數/市值資料源可用,故不提供(不做未加權簡易平均,避免誤導)",
@@ -46,6 +91,7 @@ def build_weekly_scan(db_path, date_str=None):
     result = {
         "report_type": "weekly_scan",
         "as_of": _iso(anchor),
+        "revision": revision,
         "generated_at": datetime.now(TW_TZ).isoformat(),
     }
 
@@ -92,6 +138,7 @@ def build_weekly_scan(db_path, date_str=None):
                 "signal": "extreme_fear(VIX>35)" if r["vix"] > 35 else None,
             }
             verified.append("market_vix")
+            _add_stale(stale, "market_vix", r["trade_date"], anchor, "FRED T+1")
 
     # 全市場融資融券餘額(散戶槓桿總量)
     if _table_exists(conn, "market_margin"):
@@ -112,6 +159,7 @@ def build_weekly_scan(db_path, date_str=None):
                 "margin_balance_yi_chg": r["margin_balance_yi_chg"],
             }
             verified.append("market_margin")
+            _add_stale(stale, "market_margin", r["trade_date"], anchor, None)
 
     # 大盤三大法人近 5 日
     if _table_exists(conn, "market_chip"):
@@ -184,6 +232,7 @@ def build_weekly_scan(db_path, date_str=None):
                 } for r in rows],
             }
             verified.append("foreign_futures_oi")
+            _add_stale(stale, "foreign_futures_oi", fut_latest, anchor, "TAIFEX T+1 公布")
 
     # 觀察名單個股法說會(MOPS t100sb02_1),只列今天以後的場次
     if _table_exists(conn, "ir_conference"):
@@ -372,7 +421,6 @@ def build_weekly_scan(db_path, date_str=None):
 
             rev = revenue_by_id.get(r["stock_id"])
             if rev:
-                streak_rows = revenue_streak(conn, r["stock_id"], 6)
                 momentum = {
                     "period": rev["period"],
                     "source": "TWSE-t187ap05_L",
@@ -381,15 +429,25 @@ def build_weekly_scan(db_path, date_str=None):
                     "revenue_mom_pct": rev["revenue_mom_pct"],
                     "revenue_yoy_pct": rev["revenue_yoy_pct"],
                 }
-                if streak_rows:
-                    signs = ["正" if v > 0 else "負" for _, v in streak_rows]
-                    streak_months = 1
-                    for s in signs[1:]:
-                        if s != signs[0]:
-                            break
-                        streak_months += 1
-                    momentum["yoy_streak_months"] = streak_months
-                    momentum["yoy_streak_direction"] = signs[0]
+                # IMP-3:歷史不足 MIN_HISTORY_MONTHS 期時,streak 一定等於現有期數本身
+                # (例如資料庫剛起步只有 1 期,streak 必然是 1),是「資料不足」而非
+                # 「真的只連續這麼多期」,寧可回傳 null + 註記,也不要輸出誤導性數字。
+                history_count = revenue_history_count(conn, r["stock_id"])
+                if history_count < MIN_HISTORY_MONTHS:
+                    momentum["yoy_streak_months"] = None
+                    momentum["yoy_streak_direction"] = None
+                    momentum["streak_note"] = f"history_insufficient({history_count}/{MIN_HISTORY_MONTHS})"
+                else:
+                    streak_rows = revenue_streak(conn, r["stock_id"], 6)
+                    if streak_rows:
+                        signs = ["正" if v > 0 else "負" for _, v in streak_rows]
+                        streak_months = 1
+                        for s in signs[1:]:
+                            if s != signs[0]:
+                                break
+                            streak_months += 1
+                        momentum["yoy_streak_months"] = streak_months
+                        momentum["yoy_streak_direction"] = signs[0]
                 entry["revenue_momentum"] = momentum
                 has_revenue_momentum = True
 
@@ -425,6 +483,12 @@ def build_weekly_scan(db_path, date_str=None):
                 river["note"] = ("自建歷史資料庫統計,非官方河流圖;樣本數 < 60 天時"
                                   "百分位不具參考意義") if river["sample_days"] < 60 else \
                                  "自建歷史資料庫統計,非官方河流圖"
+                # IMP-5:trailing EPS 分母來自哪一季財報、下次何時換血——財報申報後
+                # EPS 分母跳點會讓百分位驟變,讀取方需要這個標註才能分辨「變便宜」
+                # 是分母換血還是真的市場重估(見 balance_sheet.py 的申報截止日邏輯)。
+                river["eps_basis"] = "trailing_4q_reported"
+                river["latest_quarter_included"] = fin["period"] if fin else None
+                river["next_rebase_expected"] = _next_rebase_expected(fin["period"]) if fin else None
                 entry["pe_river"] = river
                 has_pe_river = True
 
@@ -444,17 +508,19 @@ def build_weekly_scan(db_path, date_str=None):
                 verified.append("watchlist[].balance_sheet")
             if has_sbl_balance:
                 verified.append("watchlist[].sbl_balance")
+                _add_stale(stale, "sbl_balance", sbl_latest, anchor, None)
             if has_holder_distribution:
                 verified.append("watchlist[].holder_distribution")
+                _add_stale(stale, "holder_distribution", holder_latest, anchor, "TDCC 週更")
 
-    result["data_quality"] = {"verified": verified, "unavailable": unavailable}
+    result["data_quality"] = {"verified": verified, "stale": stale, "unavailable": unavailable}
 
     conn.close()
     return result
 
 
-def export_weekly_scan(db_path, out_path, date_str=None):
-    data = build_weekly_scan(db_path, date_str)
+def export_weekly_scan(db_path, out_path, date_str=None, revision="draft"):
+    data = build_weekly_scan(db_path, date_str, revision)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     return out_path
