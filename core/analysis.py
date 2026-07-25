@@ -26,6 +26,16 @@ def revenue_history_count(conn, stock_id):
     """, (stock_id,)).fetchone()[0]
 
 
+def holder_history_count(conn, stock_id):
+    """個股 holder_distribution 目前累積了幾週的快照,用來判斷 holder_pct_streak()
+    算出來的連續加碼/派發週數是否可信——理由同 revenue_history_count():
+    資料庫剛起步只有 1 週快照時,streak 必然等於現有週數本身,是「資料不足」
+    而非「真的只連續這麼多週」。"""
+    return conn.execute(
+        "SELECT COUNT(*) FROM holder_distribution WHERE stock_id = ?", (stock_id,)
+    ).fetchone()[0]
+
+
 def holder_pct_streak(conn, stock_id, weeks=6):
     """個股近 N 期千張大戶(TDCC 持股分級最高級距)佔集保庫存比例的週對週增減,
     用來判斷連續加碼/派發週數(大戶籌碼動向核心指標)。

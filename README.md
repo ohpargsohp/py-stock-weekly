@@ -10,7 +10,8 @@
 - 交易日曆:依 TWSE 官方休市公告 + 臺北市颱風假公告,自動判斷當天是否為交易日
 - 月營收、財報(毛利率/營益率/EPS)、資產負債表等基本面資料
 - 集保股權分散表(千張大戶佔比,週更)、VIX 恐慌指數、法說會日期等總經與事件資料
-- 自建訊號判斷:自營商連續買賣超、營收連續成長/衰退、PE 河流圖百分位、大戶佔比連續增減週數
+- 自建訊號判斷:自營商連續買賣超、營收連續成長/衰退、PE 河流圖百分位、大戶佔比連續增減週數;歷史不足時明確輸出 `null` + 原因,不會把「資料不足」誤標成「有效訊號」
+- 資料品質標記:`data_quality.stale` 用交易日曆量化每個落後資料源(期貨 OI、VIX、集保週報)的落後天數;`revision`(draft/final)標示這份 JSON 是晚間草稿還是早盤定稿
 - 匯出 Excel 報表與給 AI 判讀用的正規化 JSON,並可設定自動寄信(失敗只印警告,不影響資料寫入)
 
 ## 安裝
@@ -74,6 +75,17 @@ python scripts/backfill_pe_history.py --years 5  # 回補近 5 年
 
 只需跑一次,之後 `main.py` 每天正常執行就會持續累積,不用重跑。
 
+### 月營收歷史回補(選用,建議跑一次)
+
+同理,「營收 YoY 連續成長/衰退月數」也要靠累積夠多個月的歷史才有意義(不足 6 個月時 JSON 會輸出 `null` + `streak_note`,見 [ARCHITECTURE.md](ARCHITECTURE.md#13-連續趨勢訊號的歷史不足防護),不會拿資料不足硬充有效訊號)。可以跑一次性回補腳本,從 MOPS 歷史彙總頁面把過去的月營收補進資料庫:
+
+```bash
+python scripts/backfill_revenue_history.py                 # 回補到 2024 年 1 月(預設)
+python scripts/backfill_revenue_history.py --start 202301  # 自訂回補起點(YYYYMM)
+```
+
+只需跑一次,之後 `main.py` 每天正常執行,新一期公告後會自動接著累積,不用重跑。
+
 ### 每日自動排程(選用)
 
 程式本身不會自己排程,要「每日自動抓取」需交給作業系統的排程工具,在收盤後執行(台股約 13:30 收盤,建議排 14:00 之後):
@@ -87,6 +99,20 @@ schtasks /create /tn "StockChipTracker" /tr "python d:\python\stock-chip-tracker
 # macOS / Linux(crontab -e,每個交易日 14:30 執行)
 30 14 * * 1-5 cd /path/to/py-stock-weekly && /usr/bin/python3 main.py
 ```
+
+**（選用）早盤定稿排程**:期貨未平倉(TAIFEX)、VIX(FRED)都是 T+1 公布,晚間執行時常常還抓不到當天資料,JSON 裡的 `revision` 會是 `"draft"`。可以在次日開盤前(08:30)另外排一個排程,重跑前一交易日的 JSON 補齊這些資料——不需要手動指定日期,`scripts/run_morning.py` 會自己用交易日曆算出「前一個交易日」(週一執行時會正確抓回上週五,不是週日):
+
+```powershell
+# Windows(工作排程器),掛 run_morning.bat
+schtasks /create /tn "StockChipTrackerMorning" /tr "d:\python\stock-chip-tracker\run_morning.bat" /sc daily /st 08:30
+```
+
+```bash
+# macOS / Linux(crontab -e)
+30 8 * * 1-5 cd /path/to/py-stock-weekly && /usr/bin/python3 scripts/run_morning.py
+```
+
+`revision` 欄位不需要手動指定——`export_json.py` 會自動拿「執行當下的實際日期」跟這份報告的 `as_of` 比較,執行日晚於 `as_of` 就會自動標成 `"final"`,細節見 [ARCHITECTURE.md](ARCHITECTURE.md#12-雙排程晚間-draft早盤-finalrevision-不是手動旗標)。
 
 ### 查詢歷史資料
 

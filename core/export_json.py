@@ -3,15 +3,17 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from core.analysis import (
-    dealer_streak, holder_pct_streak, pe_river, revenue_history_count, revenue_streak,
+    dealer_streak, holder_history_count, holder_pct_streak, pe_river,
+    revenue_history_count, revenue_streak,
 )
 from core.calendar import is_trading_day, trading_days_between
 
 TW_TZ = timezone(timedelta(hours=8))
 
-# IMP-3:少於這個月數的 YoY 歷史,streak 是「資料不足」而非「真的只連續這麼多月」,
-# 見 core/analysis.py revenue_history_count()。
-MIN_HISTORY_MONTHS = 6
+# IMP-3:少於這個期數的歷史,streak 是「資料不足」而非「真的只連續這麼多期」,
+# 見 core/analysis.py revenue_history_count() / holder_history_count()。
+MIN_HISTORY_MONTHS = 6   # 月營收 YoY 連續月數(monthly_revenue)
+MIN_HISTORY_WEEKS = 6    # 千張大戶佔比連續週數(holder_distribution)
 
 # IMP-5:依台灣財報法定申報截止日(Q1 5/15、H1(Q2) 8/14、Q3 11/14、年報(Q4) 次年 3/31),
 # 推算「目前 pe_river 用的 trailing EPS 分母」下一次會在哪個月被換血(見 balance_sheet.py
@@ -60,7 +62,7 @@ def _add_stale(stale, field, data_date, as_of, reason):
         })
 
 
-def build_weekly_scan(db_path, date_str=None, revision="draft"):
+def build_weekly_scan(db_path, date_str=None):
     """把 SQLite 裡的資料組成給 AI 判讀用的正規化 JSON。
     只放實際有抓到的資料;抓不到的欄位(大盤指數、個股股價/PE、市場層級融資
     彙總)一律列在 data_quality.unavailable,不用假數字填充。
@@ -68,9 +70,6 @@ def build_weekly_scan(db_path, date_str=None, revision="draft"):
     date_str 是這次 main.py 執行時實際要抓的日期(YYYYMMDD),用來判斷
     market_closed(見 core/calendar.py);未傳入時(例如直接呼叫這支函式測試)
     退回用 datetime.now() 當作判斷基準。
-
-    revision 是 IMP-2 雙排程機制的標記:"draft"(晚間 20:00,期貨 OI/VIX
-    可能還是 T-1)或 "final"(次日早盤 08:30 用前一交易日重跑,補齊 T+1 資料)。
     """
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -87,6 +86,14 @@ def build_weekly_scan(db_path, date_str=None, revision="draft"):
 
     anchor = conn.execute("SELECT MAX(trade_date) FROM market_chip").fetchone()[0] \
         if _table_exists(conn, "market_chip") else None
+
+    # IMP-2:revision 不是呼叫端手動指定的旗標,而是拿「實際執行當下的日期」跟
+    # as_of(anchor)比對自動推算——晚間 20:00 執行時兩者是同一天(draft);
+    # 次日早盤 08:30 用前一交易日重跑,或任何時候補跑過去某一天,執行日都會
+    # 晚於 as_of(final)。這樣不管是排程觸發還是事後手動補跑,標記都會反映
+    # 「這天的 T+1 資料現在應該已經公布完整」這個事實,不會因為忘記傳旗標而錯標。
+    today_str = datetime.now(TW_TZ).strftime("%Y%m%d")
+    revision = "final" if anchor and today_str > anchor else "draft"
 
     result = {
         "report_type": "weekly_scan",
@@ -377,16 +384,25 @@ def build_weekly_scan(db_path, date_str=None, revision="draft"):
                     "big_holder_pct": hd["big_holder_pct"],
                     "total_holders": hd["total_holders"],
                 }
-                streak_rows = holder_pct_streak(conn, r["stock_id"], 6)
-                if streak_rows:
-                    signs = ["增" if v > 0 else "減" for _, v in streak_rows]
-                    streak_weeks = 1
-                    for s in signs[1:]:
-                        if s != signs[0]:
-                            break
-                        streak_weeks += 1
-                    holder_entry["streak_weeks"] = streak_weeks
-                    holder_entry["streak_direction"] = signs[0]
+                # IMP-3(套用同款防護):歷史不足 MIN_HISTORY_WEEKS 週時,streak
+                # 一定等於現有週數本身(例如只有 1 週快照,streak 必然是 1),
+                # 是「資料不足」而非「真的只連續這麼多週」,理由同 revenue_momentum。
+                history_weeks = holder_history_count(conn, r["stock_id"])
+                if history_weeks < MIN_HISTORY_WEEKS:
+                    holder_entry["streak_weeks"] = None
+                    holder_entry["streak_direction"] = None
+                    holder_entry["streak_note"] = f"history_insufficient({history_weeks}/{MIN_HISTORY_WEEKS})"
+                else:
+                    streak_rows = holder_pct_streak(conn, r["stock_id"], 6)
+                    if streak_rows:
+                        signs = ["增" if v > 0 else "減" for _, v in streak_rows]
+                        streak_weeks = 1
+                        for s in signs[1:]:
+                            if s != signs[0]:
+                                break
+                            streak_weeks += 1
+                        holder_entry["streak_weeks"] = streak_weeks
+                        holder_entry["streak_direction"] = signs[0]
                 entry["holder_distribution"] = holder_entry
                 has_holder_distribution = True
             q = quote_by_id.get(r["stock_id"])
@@ -519,8 +535,8 @@ def build_weekly_scan(db_path, date_str=None, revision="draft"):
     return result
 
 
-def export_weekly_scan(db_path, out_path, date_str=None, revision="draft"):
-    data = build_weekly_scan(db_path, date_str, revision)
+def export_weekly_scan(db_path, out_path, date_str=None):
+    data = build_weekly_scan(db_path, date_str)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
     return out_path

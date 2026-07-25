@@ -25,7 +25,7 @@ def _with_date(path, date_str):
     return f"{root}_{date_str}{ext}"
 
 
-def run(date_str=None, revision="draft"):
+def run(date_str=None):
     date_str = date_str or datetime.now().strftime("%Y%m%d")
 
     trading_day = is_trading_day(date_str)
@@ -95,8 +95,8 @@ def run(date_str=None, revision="draft"):
     print(f"📊 報表已輸出: {excel_path}")
 
     json_path = _with_date(config.JSON_PATH, date_str)
-    export_weekly_scan(config.DB_PATH, json_path, date_str, revision)
-    print(f"🧾 判讀用 JSON 已輸出: {json_path}({revision})")
+    export_weekly_scan(config.DB_PATH, json_path, date_str)
+    print(f"🧾 判讀用 JSON 已輸出: {json_path}")
 
     try:
         send_report([json_path, excel_path])
@@ -105,9 +105,8 @@ def run(date_str=None, revision="draft"):
 
 
 if __name__ == "__main__":
-    # 用法:python main.py                    → 抓今天(晚間排程,draft)
-    #       python main.py 20260713          → 抓指定日(draft)
-    #       python main.py 20260713 final    → 抓指定日,標記為 final
-    #                                          (早盤排程用,見 scripts/run_morning.py)
-    _args = sys.argv[1:]
-    run(_args[0] if len(_args) > 0 else None, _args[1] if len(_args) > 1 else "draft")
+    # 用法:python main.py            → 抓今天
+    #       python main.py 20260713   → 抓指定日(revision draft/final 由
+    #                                    export_json.py 自動比對執行日與 as_of 推算,
+    #                                    不需要手動指定,見 core/export_json.py)
+    run(sys.argv[1] if len(sys.argv) > 1 else None)
