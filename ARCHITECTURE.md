@@ -168,7 +168,8 @@ main.py run()
 
 ```text
 main.py               進入點:載入 provider → 抓取 → 存 DB → 分析 → 匯出報表
-config.py             觀察名單與路徑設定
+config.py             路徑等共用設定,從 watchlist.py 匯入 WATCHLIST 一併對外暴露(config.WATCHLIST)
+watchlist.py          觀察名單(個人資料,已列入 .gitignore,不進版控;複製 watchlist.example.py 建立)
 core/
   base.py             DataProvider 抽象基底類別
   registry.py         自動掃描 providers/ 底下的模組並實例化

@@ -29,6 +29,15 @@ pip install -r requirements.txt
 
 需求:Python 3.9 以上。需能連線到 `www.twse.com.tw`、`openapi.twse.com.tw`、`openapi.taifex.com.tw`、`opendata.tdcc.com.tw`、`mopsov.twse.com.tw`、`api.stlouisfed.org`、`alerts.ncdr.nat.gov.tw` 這些網域(公司網路/代理伺服器若有白名單限制請先確認)。
 
+**（必要）建立觀察名單**:複製範本成 `watchlist.py`(已列入 `.gitignore`,不會進版控),沒有這個檔案 `main.py` 無法執行:
+
+```bash
+cp watchlist.example.py watchlist.py    # macOS / Linux
+copy watchlist.example.py watchlist.py  # Windows
+```
+
+再編輯 `watchlist.py` 填入自己想追蹤的股票代號,細節見下方「設定」一節。
+
 **(選用)設定寄信與 VIX**:在專案根目錄建立 `.env`(已列入 `.gitignore`,不會進版控):
 
 ```env
@@ -142,9 +151,10 @@ for row in conn.execute('SELECT * FROM stock_chip ORDER BY trade_date DESC LIMIT
 
 ## 設定
 
-編輯 `config.py`:
+**觀察名單**:編輯 `watchlist.py`(建立方式見上方「安裝」),格式是 `{股票代號: 名稱}`,個股相關 provider 只抓這裡列出的標的。每個使用者可以有自己的名單,不會互相覆蓋或進版控。
 
-- `WATCHLIST`:觀察名單(股票代號 → 名稱),個股相關 provider 只抓這裡列出的標的
+其餘設定編輯 `config.py`:
+
 - `DB_PATH` / `EXCEL_PATH` / `JSON_PATH`:輸出檔案路徑
 - `SLEEP_SEC`:每個 provider 抓取後的間隔秒數,避免對 API 過於頻繁請求
 

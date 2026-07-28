@@ -1,14 +1,6 @@
-# 觀察名單:代號 + 名稱
-WATCHLIST = {
-    "2330": "台積電",
-    "2454": "聯發科",
-    "2308": "台達電",
-    "0050": "元大台灣50",
-    "3017": "奇鋐",
-    "2059": "川湖",
-    "2382": "廣達",
-    "2383": "台光電"
-}
+# 觀察名單拆到 watchlist.py(個人清單,不進版控),複製 watchlist.example.py 建立
+from watchlist import WATCHLIST
+
 DB_PATH = "data/chip.db"
 EXCEL_PATH = "data/chip_report.xlsx"
 JSON_PATH = "data/weekly_scan.json"

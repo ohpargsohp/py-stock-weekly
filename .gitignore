@@ -218,3 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Personal watchlist (see watchlist.example.py for template)
+watchlist.py
