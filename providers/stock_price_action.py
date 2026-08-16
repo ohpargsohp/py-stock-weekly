@@ -15,6 +15,8 @@ _SIGN_RE = re.compile(r"color:(red|green)")
 
 
 def _to_num_or_none(s):
+    if s is None:
+        return None
     s = str(s).replace(",", "").strip()
     if s in ("", "-", "--"):
         return None

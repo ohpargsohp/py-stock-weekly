@@ -17,8 +17,8 @@ MIN_HISTORY_WEEKS = 6    # 千張大戶佔比連續週數(holder_distribution)
 
 # IMP-5:依台灣財報法定申報截止日(Q1 5/15、H1(Q2) 8/14、Q3 11/14、年報(Q4) 次年 3/31),
 # 推算「目前 pe_river 用的 trailing EPS 分母」下一次會在哪個月被換血(見 balance_sheet.py
-# 同一套截止日邏輯)。key 是目前 gross_margin.period 的季別,value 是 (下次換血月份, 年份位移)。
-_NEXT_REBASE = {"Q1": ("08", 0), "Q2": ("11", 0), "Q3": ("03", 1), "Q4": ("05", 1)}
+# 同一套截止日邏輯)。key 是目前 gross_margin.period 的季別,value 是 (下次換血月, 日, 年份位移)。
+_NEXT_REBASE = {"Q1": ("08", "14", 0), "Q2": ("11", "14", 0), "Q3": ("03", "31", 1), "Q4": ("05", "15", 1)}
 
 
 def _iso(date_str):
@@ -31,11 +31,26 @@ def _next_rebase_expected(period):
     if not period or len(period) < 6:
         return None
     year, q = int(period[:4]), period[4:]
-    month_year = _NEXT_REBASE.get(q)
-    if not month_year:
+    parts = _NEXT_REBASE.get(q)
+    if not parts:
         return None
-    month, year_offset = month_year
+    month, _day, year_offset = parts
     return f"{year + year_offset}-{month}"
+
+
+def _next_rebase_deadline_ymd(period):
+    """'2026Q1' -> '20260814'(下一期財報法定申報截止日,YYYYMMDD)。
+    用來跟「執行當下日期」比對,判斷 gross_margin/pe_river 現在用的這期財報
+    是否已經過了下一期的申報截止日還沒換血——沒換血代表 TWSE 新一期資料還沒
+    公布或抓取失敗,不是程式算錯,但讀取方需要知道分母可能已經過期。"""
+    if not period or len(period) < 6:
+        return None
+    year, q = int(period[:4]), period[4:]
+    parts = _NEXT_REBASE.get(q)
+    if not parts:
+        return None
+    month, day, year_offset = parts
+    return f"{year + year_offset}{month}{day}"
 
 
 def _table_exists(conn, name):
@@ -76,6 +91,7 @@ def build_weekly_scan(db_path, date_str=None):
 
     verified = []
     stale = []
+    inconsistent = []
     unavailable = [
         "market_pb(大盤股價淨值比)——TWSE 沒有官方每日 API,要算需自行對全市場個股做市值加權,"
         "目前沒有流通股數/市值資料源可用,故不提供(不做未加權簡易平均,避免誤導)",
@@ -508,6 +524,30 @@ def build_weekly_scan(db_path, date_str=None):
                 entry["pe_river"] = river
                 has_pe_river = True
 
+                # IMP-6:一致性檢查——這個 bug(gross_margin.period 跟 pe_river 對不上)
+                # 已經在重構時悄悄回歸過好幾次,兩邊理論上一定來自同一筆 fin,用明確
+                # 檢查取代「兩處各自寫一次剛好一樣」的隱性假設,未來再改壞會直接在
+                # data_quality.inconsistent 現形,不會等到人工比對才發現。
+                if fin:
+                    gm_period = entry.get("gross_margin", {}).get("period")
+                    if gm_period != river["latest_quarter_included"]:
+                        inconsistent.append({
+                            "stock_id": r["stock_id"],
+                            "stock_name": r["stock_name"],
+                            "gross_margin_period": gm_period,
+                            "pe_river_latest_quarter_included": river["latest_quarter_included"],
+                            "reason": "gross_margin.period 與 pe_river.latest_quarter_included "
+                                      "本應同源卻不同,export_json.py 的計算邏輯有誤",
+                        })
+                    deadline = _next_rebase_deadline_ymd(fin["period"])
+                    if deadline and today_str > deadline:
+                        _add_stale(
+                            stale, f"financial_income[{r['stock_id']}]", deadline, today_str,
+                            f"{r['stock_name']} 最新一期財報仍是 {fin['period']},已超過下一期"
+                            f"法定申報截止日({_iso(deadline)})卻未換新一期,"
+                            "gross_margin/pe_river 用的 trailing EPS 分母可能已過期",
+                        )
+
             watchlist.append(entry)
         if watchlist:
             result["watchlist"] = watchlist
@@ -529,7 +569,9 @@ def build_weekly_scan(db_path, date_str=None):
                 verified.append("watchlist[].holder_distribution")
                 _add_stale(stale, "holder_distribution", holder_latest, anchor, "TDCC 週更")
 
-    result["data_quality"] = {"verified": verified, "stale": stale, "unavailable": unavailable}
+    result["data_quality"] = {
+        "verified": verified, "stale": stale, "unavailable": unavailable, "inconsistent": inconsistent,
+    }
 
     conn.close()
     return result
