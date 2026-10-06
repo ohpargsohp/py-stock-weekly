@@ -11,7 +11,10 @@
 - 月營收、財報(毛利率/營益率/EPS)、資產負債表等基本面資料
 - 集保股權分散表(千張大戶佔比,週更)、VIX 恐慌指數、法說會日期等總經與事件資料
 - 自建訊號判斷:自營商連續買賣超、營收連續成長/衰退、PE 河流圖百分位、大戶佔比連續增減週數;歷史不足時明確輸出 `null` + 原因,不會把「資料不足」誤標成「有效訊號」
-- 資料品質標記:`data_quality.stale` 用交易日曆量化每個落後資料源(期貨 OI、VIX、集保週報)的落後天數;`revision`(draft/final)標示這份 JSON 是晚間草稿還是早盤定稿
+- 資料品質標記:`data_quality.stale` 用交易日曆量化每個落後資料源(期貨 OI、VIX、集保週報、融資融券、借券賣出)的落後天數;`revision`(draft/final)標示這份 JSON 是晚間草稿還是早盤定稿
+- 失效資料源防護:每日資料源落後超過 5 個交易日時,數值直接輸出 `null`、從 `verified` 移到 `unavailable`,不會把停更好幾週的數字當成今天的資料
+- 自動補抓:融資融券(MI_MARGN)、借券賣出(TWT93U)約 21:00 後才公布,晚間排程當天抓不到時,下一次執行會自動往回補抓缺漏的交易日(最多 10 個交易日)
+- 止跌閘門:`price_action` 帶前一交易日的 `prev_close`/`prev_low`,並自動算出 `stop_decline`(收盤 > 前日收盤 且 盤中低 > 前日盤中低)與連續天數 `stop_decline_count`
 - 匯出 Excel 報表與給 AI 判讀用的正規化 JSON,並可設定自動寄信(失敗只印警告,不影響資料寫入)
 
 ## 安裝
@@ -61,7 +64,7 @@ python main.py 20260713   # 抓指定日期(格式 YYYYMMDD)
 ### 執行時會發生什麼
 
 1. 依 TWSE 官方休市公告判斷今天是否為交易日,印出提示
-2. 掃描 `providers/` 下所有資料源,逐一抓取當日資料並 upsert 進 `data/chip.db`,主控台印出每個 provider 的抓取結果
+2. 掃描 `providers/` 下所有資料源,逐一抓取當日資料並 upsert 進 `data/chip.db`,主控台印出每個 provider 的抓取結果;設有補抓窗口的資料源(融資融券、借券賣出)會順便補抓前幾個交易日缺的資料,補到時印出 `🔁` 提示
 3. 印出自營商近 6 日買賣方向,連續同向達 5 日以上會提示強烈訊號
 4. 若 VIX > 35 印出極端恐慌提示(需先設定 `FRED_API_KEY`)
 5. 印出觀察名單個股月營收 YoY 連續成長/衰退達 3 個月以上的提示
@@ -97,19 +100,21 @@ python scripts/backfill_revenue_history.py --start 202301  # 自訂回補起點(
 
 ### 每日自動排程(選用)
 
-程式本身不會自己排程,要「每日自動抓取」需交給作業系統的排程工具,在收盤後執行(台股約 13:30 收盤,建議排 14:00 之後):
+程式本身不會自己排程,要「每日自動抓取」需交給作業系統的排程工具,在收盤後執行。各資料源公布時間不同(個股三大法人約 16:00、融資融券/借券賣出約 21:00 後),建議排晚間 20:00:
 
 ```powershell
-# Windows(工作排程器)
-schtasks /create /tn "StockChipTracker" /tr "python d:\python\stock-chip-tracker\main.py" /sc daily /st 14:30
+# Windows(工作排程器),掛 run_daily.bat(輸出會附加到 data\run.log)
+schtasks /create /tn "StockChipTracker" /tr "d:\python\stock-chip-tracker\run_daily.bat" /sc daily /st 20:00
 ```
 
 ```bash
-# macOS / Linux(crontab -e,每個交易日 14:30 執行)
-30 14 * * 1-5 cd /path/to/py-stock-weekly && /usr/bin/python3 main.py
+# macOS / Linux(crontab -e,每個交易日 20:00 執行)
+0 20 * * 1-5 cd /path/to/py-stock-weekly && /usr/bin/python3 main.py
 ```
 
-**（選用）早盤定稿排程**:期貨未平倉(TAIFEX)、VIX(FRED)都是 T+1 公布,晚間執行時常常還抓不到當天資料,JSON 裡的 `revision` 會是 `"draft"`。可以在次日開盤前(08:30)另外排一個排程,重跑前一交易日的 JSON 補齊這些資料——不需要手動指定日期,`scripts/run_morning.py` 會自己用交易日曆算出「前一個交易日」(週一執行時會正確抓回上週五,不是週日):
+20:00 執行時融資融券/借券賣出通常還沒公布,當天會抓到 0 筆,這是正常的——下一次執行會自動補抓回來(見上方「功能」的自動補抓),搭配下面的早盤定稿排程,隔天早上的 JSON 就會是完整的。
+
+**(建議)早盤定稿排程**:期貨未平倉(TAIFEX)、VIX(FRED)都是 T+1 公布,晚間執行時常常還抓不到當天資料,JSON 裡的 `revision` 會是 `"draft"`。融資融券/借券賣出也一樣晚間抓不到。建議在次日開盤前(08:30)另外排一個排程,重跑前一交易日的 JSON 補齊這些資料——不需要手動指定日期,`scripts/run_morning.py` 會自己用交易日曆算出「前一個交易日」(週一執行時會正確抓回上週五,不是週日):
 
 ```powershell
 # Windows(工作排程器),掛 run_morning.bat

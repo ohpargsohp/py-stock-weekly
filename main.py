@@ -12,7 +12,7 @@ load_dotenv()
 
 import config
 from core.analysis import dealer_streak, holder_pct_streak, pe_river, revenue_streak
-from core.calendar import is_trading_day
+from core.calendar import is_trading_day, previous_trading_day
 from core.export_json import export_weekly_scan
 from core.mailer import send_report
 from core.registry import load_providers
@@ -23,6 +23,29 @@ from core.storage import Storage
 def _with_date(path, date_str):
     root, ext = os.path.splitext(path)
     return f"{root}_{date_str}{ext}"
+
+
+def catchup(store, p, date_str, days):
+    """往回檢查 date_str 之前 days 個交易日,p 的資料表裡缺哪天就補抓哪天
+    (見 core/base.py catchup_days)。交易日曆無法判斷時直接停止,不亂猜日期。"""
+    filled = []
+    d = date_str
+    for _ in range(days):
+        d = previous_trading_day(d)
+        if d is None:
+            break
+        if store.conn.execute(
+            f"SELECT 1 FROM {p.name} WHERE trade_date = ? LIMIT 1", (d,)
+        ).fetchone():
+            continue
+        rows = p.fetch(d)
+        store.upsert(p, rows)
+        if rows:
+            filled.append(d)
+        time.sleep(config.SLEEP_SEC)
+    if filled:
+        print(f"🔁 {p.name}: 補抓 {len(filled)} 個交易日 {min(filled)}~{max(filled)}")
+    return filled
 
 
 def run(date_str=None):
@@ -43,6 +66,8 @@ def run(date_str=None):
         msg = p.describe(rows)
         print(msg if msg else f"✅ {p.name}: {len(rows)} 筆")
         time.sleep(config.SLEEP_SEC)
+        if p.catchup_days:
+            catchup(store, p, date_str, p.catchup_days)
 
     streak = dealer_streak(store.conn, 6)
     if streak:

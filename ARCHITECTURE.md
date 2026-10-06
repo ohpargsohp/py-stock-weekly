@@ -36,6 +36,8 @@
 
 各區塊自己標出落後的日期還不夠——AI 判讀方看到「兩個不同日期」不見得會意識到「這是過期資料,不能當今天的訊號解讀」。`data_quality.stale`(見 `_add_stale()`)把這件事量化:對 `market_vix`、`market_margin`、`foreign_futures_oi`,以及 watchlist 內層的 `sbl_balance`、`holder_distribution`,逐一拿它們自己的日期跟 `as_of` 比對,算出 `lag_days`(見下一點,用交易日曆算,不是日曆天數)、附上已知的落後原因(如 `"TAIFEX T+1 公布"`、`"TDCC 週更"`),同一個欄位只記一次。`stale` 陣列永遠存在(即使是空陣列),代表「這次有檢查過,沒有落後」,跟陣列裡沒有這個欄位是兩種不同的意思。
 
+落後超過 `MAX_DAILY_LAG`(5 個交易日)的每日資料源(`market_margin`、watchlist 內層 `margin_balance`/`sbl_balance`)不再只標 stale:數值直接輸出 `null`、不列入 `verified`,改在 `unavailable` 說明停在哪天——停更兩個月的融資餘額看起來跟真的一樣,只靠 stale 標註,讀取方漏看就會拿過期數字判讀。這幾支 TWSE API 約 21:00 後才公布、20:00 排程當天必定抓不到,所以 provider 設了 `catchup_days`(見 `core/base.py`),`main.py` 每次執行會往回補抓資料表裡缺的交易日,正常情況下只會落後 1 天。
+
 ### 4b. 落後天數的計算:交易日曆,不是日曆天數
 
 `core/calendar.py` 的 `trading_days_between(start, end)` 算「從 start(不含)到 end(含)之間有幾個交易日」,而不是單純日曆天數相減——週五的資料在週一被讀取時,`lag_days` 應該是 1(只隔了 1 個交易日),不是 3(週六日週一的日曆天數)。做法是逐一日曆日呼叫 `is_trading_day()` 累加,`is_trading_day()` 回傳 `None`(無法判斷)的日子保守地不計入,寧可低估落後天數也不要因為交易日曆本身不確定而誤判。同一支模組另外提供 `previous_trading_day(date_str)`,回傳前一個交易日(不是單純減一天),支援下面第 13 點的雙排程機制。

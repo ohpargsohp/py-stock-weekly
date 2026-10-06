@@ -77,3 +77,31 @@ def pe_river(conn, stock_id):
         "max_pe": pes_sorted[-1],
         "percentile": round(rank / n * 100, 1),
     }
+
+
+def stop_decline_streak(conn, stock_id, days=20):
+    """個股止跌訊號:「收盤 > 前一交易日收盤 且 盤中低 > 前一交易日盤中低」。
+    回傳 (prev_row, streak):prev_row 是最新一天的前一交易日那筆 stock_price_action
+    (不相鄰或查無則為 None),streak 是從最新一天往回連續符合止跌條件的天數(0 = 今天不符合)。
+
+    每一對比較都要求兩筆資料在交易日曆上真的相鄰(previous_trading_day 相符)——
+    資料庫漏抓某一天時,拿更早一天的低點來比會得出假訊號,遇到缺口直接停止往回數。
+    最新一天自己就沒有相鄰前一日時,streak 回傳 None(無法判斷,不是 0)。"""
+    from core.calendar import previous_trading_day
+
+    rows = conn.execute("""
+        SELECT trade_date, close, low FROM stock_price_action
+        WHERE stock_id = ? ORDER BY trade_date DESC LIMIT ?
+    """, (stock_id, days + 1)).fetchall()
+    if len(rows) < 2 or previous_trading_day(rows[0][0]) != rows[1][0]:
+        return None, None
+
+    streak = 0
+    for i in range(len(rows) - 1):
+        (d, close, low), (pd, prev_close, prev_low) = rows[i], rows[i + 1]
+        if i > 0 and previous_trading_day(d) != pd:
+            break
+        if None in (close, low, prev_close, prev_low) or not (close > prev_close and low > prev_low):
+            break
+        streak += 1
+    return rows[1], streak

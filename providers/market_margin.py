@@ -17,6 +17,7 @@ class MarketMarginProvider(DataProvider):
 
     name = "market_margin"
     pk = ["trade_date"]
+    catchup_days = 10  # TWSE 約 21:00 後才公布,20:00 排程當天抓不到,隔天補抓(見 core/base.py)
     schema = {
         "trade_date": "TEXT",
         "margin_balance_lots": "INTEGER",      # 融資今日餘額(張)

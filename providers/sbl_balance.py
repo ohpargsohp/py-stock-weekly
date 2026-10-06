@@ -23,6 +23,7 @@ class SblBalanceProvider(DataProvider):
 
     name = "sbl_balance"
     pk = ["trade_date", "stock_id"]
+    catchup_days = 10  # TWSE 約 21:00 後才公布,20:00 排程當天抓不到,隔天補抓(見 core/base.py)
     schema = {
         "trade_date": "TEXT",
         "stock_id": "TEXT",

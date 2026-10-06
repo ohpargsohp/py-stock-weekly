@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from core.analysis import (
     dealer_streak, holder_history_count, holder_pct_streak, pe_river,
-    revenue_history_count, revenue_streak,
+    revenue_history_count, revenue_streak, stop_decline_streak,
 )
 from core.calendar import is_trading_day, trading_days_between
 
@@ -14,6 +14,11 @@ TW_TZ = timezone(timedelta(hours=8))
 # 見 core/analysis.py revenue_history_count() / holder_history_count()。
 MIN_HISTORY_MONTHS = 6   # 月營收 YoY 連續月數(monthly_revenue)
 MIN_HISTORY_WEEKS = 6    # 千張大戶佔比連續週數(holder_distribution)
+
+# 每日更新的資料源落後超過這麼多個交易日,視為資料源失效而非正常延遲:數值改輸出 null、
+# 從 verified 移到 unavailable——停更兩個月的融資餘額看起來跟真的一樣,
+# 只在 stale 裡標註,讀取方漏看就會拿過期數字判讀(例如斷頭風險)。
+MAX_DAILY_LAG = 5
 
 # IMP-5:依台灣財報法定申報截止日(Q1 5/15、H1(Q2) 8/14、Q3 11/14、年報(Q4) 次年 3/31),
 # 推算「目前 pe_river 用的 trailing EPS 分母」下一次會在哪個月被換血(見 balance_sheet.py
@@ -75,6 +80,17 @@ def _add_stale(stale, field, data_date, as_of, reason):
             "lag_days": lag,
             "reason": reason or "來源更新延遲",
         })
+
+
+def _lag(data_date, as_of):
+    return trading_days_between(data_date, as_of) if data_date and as_of else 0
+
+
+def _dead_source(unavailable, field, label, data_date, lag):
+    unavailable.append(
+        f"{field}({label})——最新資料停在 {_iso(data_date)},落後 {lag} 個交易日"
+        f"(> {MAX_DAILY_LAG}),視為資料源抓取失效,數值改為 null 避免誤用過期數字"
+    )
 
 
 def build_weekly_scan(db_path, date_str=None):
@@ -168,7 +184,11 @@ def build_weekly_scan(db_path, date_str=None):
         r = conn.execute(
             "SELECT * FROM market_margin ORDER BY trade_date DESC LIMIT 1"
         ).fetchone()
-        if r:
+        lag = _lag(r["trade_date"], anchor) if r else 0
+        if r and lag > MAX_DAILY_LAG:
+            result["market_margin"] = None
+            _dead_source(unavailable, "market_margin", "全市場融資融券", r["trade_date"], lag)
+        elif r:
             result["market_margin"] = {
                 "trade_date": _iso(r["trade_date"]),
                 "source": "TWSE-MI_MARGN",
@@ -182,7 +202,7 @@ def build_weekly_scan(db_path, date_str=None):
                 "margin_balance_yi_chg": r["margin_balance_yi_chg"],
             }
             verified.append("market_margin")
-            _add_stale(stale, "market_margin", r["trade_date"], anchor, None)
+            _add_stale(stale, "market_margin", r["trade_date"], anchor, "TWSE 約 21:00 後公布")
 
     # 大盤三大法人近 5 日
     if _table_exists(conn, "market_chip"):
@@ -285,17 +305,34 @@ def build_weekly_scan(db_path, date_str=None):
         stock_rows = conn.execute(
             "SELECT * FROM stock_chip WHERE trade_date = ?", (stock_latest,)
         ).fetchall() if stock_latest else []
+        # 融資融券/借券賣出(MI_MARGN/TWT93U)約 21:00 後才公布,常比 stock_chip 晚一天,
+        # 各自取自己最新一天(帶自己的日期),不要求跟 stock_chip 同一天;
+        # 落後超過 MAX_DAILY_LAG 時整段改 null 並列入 unavailable。
         margin_by_id = {}
-        if stock_latest and _table_exists(conn, "margin_balance"):
-            margin_by_id = {
-                r["stock_id"]: r for r in conn.execute(
-                    "SELECT * FROM margin_balance WHERE trade_date = ?", (stock_latest,)
-                ).fetchall()
-            }
+        margin_latest = None
+        if _table_exists(conn, "margin_balance"):
+            margin_latest = conn.execute("SELECT MAX(trade_date) FROM margin_balance").fetchone()[0]
+            margin_lag = _lag(margin_latest, anchor)
+            if margin_latest and margin_lag > MAX_DAILY_LAG:
+                _dead_source(unavailable, "watchlist[].margin_balance", "個股融資融券",
+                             margin_latest, margin_lag)
+                margin_latest = None
+            elif margin_latest:
+                margin_by_id = {
+                    r["stock_id"]: r for r in conn.execute(
+                        "SELECT * FROM margin_balance WHERE trade_date = ?", (margin_latest,)
+                    ).fetchall()
+                }
         sbl_by_id = {}
+        sbl_dead = False
         if _table_exists(conn, "sbl_balance"):
             sbl_latest = conn.execute("SELECT MAX(trade_date) FROM sbl_balance").fetchone()[0]
-            if sbl_latest:
+            sbl_lag = _lag(sbl_latest, anchor)
+            if sbl_latest and sbl_lag > MAX_DAILY_LAG:
+                sbl_dead = True
+                _dead_source(unavailable, "watchlist[].sbl_balance", "個股借券賣出餘額",
+                             sbl_latest, sbl_lag)
+            elif sbl_latest:
                 sbl_by_id = {
                     r["stock_id"]: r for r in conn.execute(
                         "SELECT * FROM sbl_balance WHERE trade_date = ?", (sbl_latest,)
@@ -355,7 +392,7 @@ def build_weekly_scan(db_path, date_str=None):
                     ).fetchall()
                 }
         has_revenue_momentum = has_gross_margin = has_pe_river = has_price_action = False
-        has_balance_sheet = has_sbl_balance = has_holder_distribution = False
+        has_balance_sheet = has_sbl_balance = has_holder_distribution = has_margin_balance = False
         watchlist = []
         for r in stock_rows:
             entry = {
@@ -371,7 +408,9 @@ def build_weekly_scan(db_path, date_str=None):
             }
             m = margin_by_id.get(r["stock_id"])
             if m:
+                has_margin_balance = True
                 entry.update({
+                    "margin_trade_date": _iso(m["trade_date"]),
                     "unit_margin": "張",
                     "margin_balance": m["margin_balance"],
                     "margin_balance_chg": m["margin_balance_chg"],
@@ -390,6 +429,8 @@ def build_weekly_scan(db_path, date_str=None):
                     "sbl_return": sbl["sbl_return"],
                 }
                 has_sbl_balance = True
+            elif sbl_dead:
+                entry["sbl_balance"] = None
             hd = holder_by_id.get(r["stock_id"])
             if hd:
                 holder_entry = {
@@ -435,6 +476,9 @@ def build_weekly_scan(db_path, date_str=None):
             if pa:
                 # 獨立帶自己的 trade_date/close,不強制跟 stock_quote 同一天——
                 # 兩支 provider 來源不同 API,理由同本區塊其他低頻資料的落後處理原則。
+                # prev_close/prev_low 取資料庫裡「交易日曆上相鄰」的前一天,供止跌閘門
+                # (收盤 > 前日收盤 且 盤中低 > 前日盤中低)自動判定;不相鄰時一律 null。
+                prev, sd_count = stop_decline_streak(conn, r["stock_id"])
                 entry["price_action"] = {
                     "trade_date": _iso(pa["trade_date"]),
                     "source": "TWSE-MI_INDEX",
@@ -448,6 +492,13 @@ def build_weekly_scan(db_path, date_str=None):
                     "volume_lots": pa["volume_lots"],
                     "unit_turnover": "億元",
                     "turnover_yi": pa["turnover_yi"],
+                    "prev_trade_date": _iso(prev["trade_date"]) if prev else None,
+                    "prev_close": prev["close"] if prev else None,
+                    "prev_low": prev["low"] if prev else None,
+                    "stop_decline": sd_count > 0 if sd_count is not None else None,
+                    "stop_decline_count": sd_count,
+                    "stop_decline_rule": "close > prev_close 且 low > prev_low;"
+                                         "count = 從 trade_date 往回連續符合的交易日數",
                 }
                 has_price_action = True
 
@@ -562,9 +613,12 @@ def build_weekly_scan(db_path, date_str=None):
                 verified.append("watchlist[].price_action")
             if has_balance_sheet:
                 verified.append("watchlist[].balance_sheet")
+            if has_margin_balance:
+                verified.append("watchlist[].margin_balance")
+                _add_stale(stale, "margin_balance", margin_latest, anchor, "TWSE 約 21:00 後公布")
             if has_sbl_balance:
                 verified.append("watchlist[].sbl_balance")
-                _add_stale(stale, "sbl_balance", sbl_latest, anchor, None)
+                _add_stale(stale, "sbl_balance", sbl_latest, anchor, "TWSE 約 21:00 後公布")
             if has_holder_distribution:
                 verified.append("watchlist[].holder_distribution")
                 _add_stale(stale, "holder_distribution", holder_latest, anchor, "TDCC 週更")
